@@ -1,0 +1,10 @@
+{
+  "name": "soccer-runs",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "discord:invite-bot": "node --env-file=.env scripts/setup-discord.mjs invite-bot",
+    "discord:setup": "node --env-file=.env scripts/setup-discord.mjs setup",
+    "discord:organizer": "node --env-file=.env scripts/setup-discord.mjs organizer"
+  }
+}
