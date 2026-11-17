@@ -2,9 +2,10 @@ import { sql, type Match, type Registration } from "./db.js";
 import { discord, displayName, editReply, EPHEMERAL, env, isOrganizer, option, type Interaction } from "./discord.js";
 import { lobbyMessage } from "./lobby.js";
 import { money, priceFor } from "./pricing.js";
-import { addDays, dayLabel, parseDate, parseTime, shortTime, torontoLabel, torontoToDate, torontoToday } from "./time.js";
+import { addDays, dateChoices, dayLabel, parseDate, parseTime, resolveDate, shortTime, torontoLabel, torontoToDate, torontoToday } from "./time.js";
 import { findSlots, loadAvailability, type Size } from "./availability.js";
 import { bookingLink, dimensions, type Format, FORMATS } from "./venues.js";
+import { reserveButtonId } from "./reserve.js";
 
 type Reply = { content: string; flags?: number };
 
@@ -72,7 +73,7 @@ export async function confirmMatch(interaction: Interaction): Promise<void> {
   await reply(`✅ Match #${matchId} is open and posted in <#${channelId}>.`);
 }
 
-const MAX_DAYS_SHOWN = 7;
+const DEFAULT_DAYS = 7;
 const MAX_SLOTS_SHOWN = 10; // ~350 characters per card; Discord allows 6000 per message
 
 /** /available: open Mississauga turf slots with total cost and per-player price. Runs after a deferred reply. */
@@ -85,40 +86,40 @@ export async function available(interaction: Interaction): Promise<void> {
   const length = option<number>(interaction, "length") ?? DEFAULT_DURATION_MINUTES;
   const players = option<number>(interaction, "players") ?? perSide * 2;
   const afterText = option<string>(interaction, "after") ?? "5pm";
-  const dateText = option<string>(interaction, "date");
+  const fromText = option<string>(interaction, "from");
+  const toText = option<string>(interaction, "to");
 
   const after = parseTime(afterText);
   if (!after) return void (await reply({ content: "I couldn't read that time. Use something like 5pm or 17:00." }));
   const afterMinute = after[0] * 60 + after[1];
 
-  const today = torontoToday();
-  const first = addDays(today, 1), last = addDays(today, 30);
-  let dates: string[];
-  if (dateText) {
-    const parsed = parseDate(dateText);
-    if (!parsed) return void (await reply({ content: "I couldn't read that date. Use YYYY-MM-DD, like 2026-11-29." }));
-    const ymd = parsed.map((n, i) => String(n).padStart(i ? 2 : 4, "0")).join("-");
-    if (ymd < first || ymd > last) {
-      return void (await reply({ content: `Online booking only covers ${dayLabel(first)} to ${dayLabel(last)} (at least 24 hours and at most 30 days ahead).` }));
-    }
-    dates = [ymd];
-  } else {
-    dates = Array.from({ length: MAX_DAYS_SHOWN }, (_, i) => addDays(first, i));
+  // Dates: from (default tomorrow) to (default a week later), inside the online booking window.
+  const { first, last } = bookingWindow();
+  const from = fromText ? resolveDate(fromText, first, last) : first;
+  if (!from) return void (await reply({ content: `I couldn't read the from date "${fromText}". Pick one from the list.` }));
+  const to = toText ? resolveDate(toText, first, last) : minDate(addDays(from, DEFAULT_DAYS - 1), last);
+  if (!to) return void (await reply({ content: `I couldn't read the to date "${toText}". Pick one from the list.` }));
+  if (from < first || to > last) {
+    return void (await reply({ content: `Online booking only covers ${dayLabel(first)} to ${dayLabel(last)} (at least 24 hours and at most 30 days ahead).` }));
   }
+  if (to < from) return void (await reply({ content: `The to date (${dayLabel(to)}) is before the from date (${dayLabel(from)}).` }));
+  const dates: string[] = [];
+  for (let ymd = from; ymd <= to; ymd = addDays(ymd, 1)) dates.push(ymd);
 
   const snapshot = await loadAvailability();
   const found = dates.flatMap((ymd) => findSlots(snapshot, ymd, size, length, afterMinute).map((slot) => ({ ymd, slot })));
   const sizeLabel = { quarter: "Quarter field", half: "Half field", full: "Full field" }[size];
 
   // One short card per opening: when/where, price, then format and links.
-  const fields = found.slice(0, MAX_SLOTS_SHOWN).map(({ ymd, slot: s }) => {
+  const shown = found.slice(0, MAX_SLOTS_SHOWN);
+  const fields = shown.map(({ ymd, slot: s }, i) => {
     const end = s.bestStart + length;
     const perPlayer = priceFor(s.cost.totalCents, players).checkoutCents;
     const links = [`[Book](${bookingLink(s.resourceIds[0])})`, ...s.venue.links.map((l) => `[${l.label}](${l.url})`)].join(" · ");
     const widerWindow = s.open.start < s.bestStart || s.open.end > end ? ` · 🟢 open ${shortTime(s.open.start)}–${shortTime(s.open.end)}` : "";
     const dims = `${dimensions(s.venue, size)}${s.venue.pitch.estimated ? " (est.)" : ""}`;
     return {
-      name: `📅 ${dayLabel(ymd).replace(",", "")} · 🕐 ${shortTime(s.bestStart)}–${shortTime(end)} · 📍 ${s.venue.name} ${s.label}`,
+      name: `${i + 1}. 📅 ${dayLabel(ymd).replace(",", "")} · 🕐 ${shortTime(s.bestStart)}–${shortTime(end)} · 📍 ${s.venue.name} ${s.label}`,
       value: [
         `💵 **${money(perPlayer)}/player** · ${money(s.cost.totalCents)} total · ${s.cost.rate}`,
         `⚽ ${format} · 📏 ${dims}${widerWindow}`,
@@ -128,7 +129,7 @@ export async function available(interaction: Interaction): Promise<void> {
   });
 
   const range = dates.length === 1 ? dayLabel(dates[0]) : `${dayLabel(dates[0])} – ${dayLabel(dates[dates.length - 1])}`;
-  const more = found.length > MAX_SLOTS_SHOWN ? `\nShowing ${MAX_SLOTS_SHOWN} of ${found.length} · add \`date:\` for one day` : "";
+  const more = found.length > MAX_SLOTS_SHOWN ? `\nShowing ${MAX_SLOTS_SHOWN} of ${found.length} · narrow \`from:\` and \`to:\`` : "";
   const checked = Math.floor(snapshot.oldestFetch.getTime() / 1000);
   await reply({
     embeds: [
@@ -143,7 +144,43 @@ export async function available(interaction: Interaction): Promise<void> {
         timestamp: new Date(checked * 1000).toISOString(),
       },
     ],
+    // "📝 Reserve 1" … under the cards: saves that slot as a draft game with booking steps.
+    components: chunk(
+      shown.map(({ ymd, slot: s }, i) => ({
+        type: 2,
+        style: 1,
+        label: `📝 Reserve ${i + 1}`,
+        custom_id: reserveButtonId({ resourceIds: s.resourceIds, ymd, startMinute: s.bestStart, lengthMinutes: length, format, players }),
+      })),
+      5,
+    ).map((buttons) => ({ type: 1, components: buttons })),
   });
+}
+
+/** Online booking on Active Mississauga: at least 24 hours and at most 30 days ahead. */
+function bookingWindow() {
+  const today = torontoToday();
+  return { first: addDays(today, 1), last: addDays(today, 30) };
+}
+
+const minDate = (a: string, b: string) => (a < b ? a : b);
+
+/** Date pickers on /available (from, to) and /reserve (date): bookable days that match what's typed. */
+export function dateAutocomplete(interaction: Interaction): { name: string; value: string }[] {
+  const focused = interaction.data?.options?.find((o) => o.focused);
+  if (!focused) return [];
+  let { first, last } = bookingWindow();
+  if (focused.name === "to") {
+    // Start the "to" list at the chosen "from" day.
+    const fromText = option<string>(interaction, "from");
+    const from = fromText ? resolveDate(fromText, first, last) : null;
+    if (from && from >= first && from <= last) first = from;
+  }
+  return dateChoices(String(focused.value ?? ""), first, last);
+}
+
+function chunk<T>(items: T[], size: number): T[][] {
+  return Array.from({ length: Math.ceil(items.length / size) }, (_, i) => items.slice(i * size, i * size + size));
 }
 
 /** Claim & Pay / Leave Match buttons. Payments arrive in the next build step. */

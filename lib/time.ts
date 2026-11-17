@@ -9,7 +9,7 @@ export function parseDate(text: string): [number, number, number] | null {
   return check.getUTCMonth() === mo - 1 && check.getUTCDate() === d ? [y, mo, d] : null;
 }
 
-/** "20:00", "8pm", "8:30 pm" -> [20, 0] */
+/** "20:00", "8pm", "8:30 pm" -> [20, 0]. A bare "7" means 7 PM: our games are in the evening. */
 export function parseTime(text: string): [number, number] | null {
   const m = text.trim().toLowerCase().match(/^(\d{1,2})(?::(\d{2}))?\s*(am|pm)?$/);
   if (!m) return null;
@@ -18,8 +18,38 @@ export function parseTime(text: string): [number, number] | null {
   if (m[3]) {
     if (hour < 1 || hour > 12) return null;
     hour = (hour % 12) + (m[3] === "pm" ? 12 : 0);
+  } else if (!m[2] && hour >= 1 && hour <= 11) {
+    hour += 12;
   }
   return hour <= 23 && minute <= 59 ? [hour, minute] : null;
+}
+
+/** [2026, 11, 21] -> "2026-11-21" */
+export function ymdOf([y, m, d]: [number, number, number]): string {
+  return `${y}-${String(m).padStart(2, "0")}-${String(d).padStart(2, "0")}`;
+}
+
+const squash = (text: string) => text.trim().toLowerCase().replace(/,/g, "").replace(/\s+/g, " ");
+
+/** Days from `first` to `last` for a Discord date picker, filtered by what's typed ("fri", "nov 21", "12-0"). */
+export function dateChoices(typed: string, first: string, last: string, limit = 25): { name: string; value: string }[] {
+  const q = squash(typed);
+  const out: { name: string; value: string }[] = [];
+  for (let ymd = first; ymd <= last && out.length < limit; ymd = addDays(ymd, 1)) {
+    const name = dayLabel(ymd);
+    if (!q || squash(name).includes(q) || ymd.includes(q)) out.push({ name, value: ymd });
+  }
+  return out;
+}
+
+/** A picked or typed date ("2026-11-21", "Nov 21", "Fri Nov 21") as YYYY-MM-DD, or null if unclear. */
+export function resolveDate(text: string, first: string, last: string): string | null {
+  const parsed = parseDate(text);
+  if (parsed) return ymdOf(parsed);
+  const q = squash(text);
+  if (!q) return null;
+  const matches = dateChoices("", first, last, 31).filter((c) => squash(c.name).endsWith(q));
+  return matches.length === 1 ? matches[0].value : null;
 }
 
 /** Today's date in Toronto as YYYY-MM-DD. */

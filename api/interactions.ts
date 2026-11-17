@@ -1,5 +1,6 @@
 import { waitUntil } from "@vercel/functions";
-import { available, confirmMatch, lobbyButton, newGame } from "../lib/commands.js";
+import { available, confirmMatch, dateAutocomplete, lobbyButton, newGame } from "../lib/commands.js";
+import { parseReserveButton, parseReserveCommand, reserve } from "../lib/reserve.js";
 import { editReply, EPHEMERAL, InteractionType, isValidSignature, json, ResponseType, type Interaction } from "../lib/discord.js";
 
 // Discord sends every slash command and button click here (the app's Interactions Endpoint URL).
@@ -13,6 +14,11 @@ export async function POST(request: Request): Promise<Response> {
   if (interaction.type === InteractionType.PING) return json({ type: ResponseType.PONG });
 
   try {
+    // Typing in a date box: suggest bookable days.
+    if (interaction.type === InteractionType.AUTOCOMPLETE) {
+      return json({ type: ResponseType.AUTOCOMPLETE_RESULT, data: { choices: dateAutocomplete(interaction) } });
+    }
+
     if (interaction.type === InteractionType.APPLICATION_COMMAND) {
       switch (interaction.data?.name) {
         case "ping":
@@ -27,10 +33,20 @@ export async function POST(request: Request): Promise<Response> {
         case "available":
           waitUntil(available(interaction).catch((err) => failLater(interaction, err)));
           return json({ type: ResponseType.DEFERRED_MESSAGE, data: { flags: EPHEMERAL } });
+        case "reserve":
+          waitUntil(reserve(interaction, parseReserveCommand(interaction)).catch((err) => failLater(interaction, err)));
+          return json({ type: ResponseType.DEFERRED_MESSAGE, data: { flags: EPHEMERAL } });
       }
     }
 
-    if (interaction.type === InteractionType.MESSAGE_COMPONENT) return message(lobbyButton(interaction));
+    if (interaction.type === InteractionType.MESSAGE_COMPONENT) {
+      const reserveRequest = parseReserveButton(interaction.data?.custom_id ?? "");
+      if (reserveRequest) {
+        waitUntil(reserve(interaction, reserveRequest).catch((err) => failLater(interaction, err)));
+        return json({ type: ResponseType.DEFERRED_MESSAGE, data: { flags: EPHEMERAL } });
+      }
+      return message(lobbyButton(interaction));
+    }
   } catch (err) {
     console.error(err);
     return message({ content: "⚠️ Something went wrong. Please try again in a minute.", flags: EPHEMERAL });

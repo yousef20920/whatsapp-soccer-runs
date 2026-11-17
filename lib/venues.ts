@@ -157,3 +157,13 @@ export function fieldCost(venue: Venue, ymd: string, startMinute: number, length
   const rate = peakSlices === 0 ? "off-peak" : peakSlices === slices ? "peak" : "part peak";
   return { subtotalCents, hstCents, totalCents: subtotalCents + hstCents, rate };
 }
+
+/** The venue that owns these quarter fields, if they all belong to one venue. */
+export function venueFor(resourceIds: number[]): Venue | undefined {
+  const venue = VENUES.find((v) => v.quarters.some((q) => q.id === resourceIds[0]));
+  return venue && resourceIds.every((id) => venue.quarters.some((q) => q.id === id)) ? venue : undefined;
+}
+
+export const sizeFor = (fieldCount: number) => (fieldCount === 4 ? "full" : fieldCount === 2 ? "half" : "quarter");
+
+export const DEFAULT_FORMAT = { quarter: "6v6", half: "9v9", full: "11v11" } as const;

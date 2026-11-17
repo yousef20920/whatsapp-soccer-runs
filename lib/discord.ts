@@ -2,8 +2,8 @@ import { createPublicKey, verify } from "node:crypto";
 
 const API = "https://discord.com/api/v10";
 
-export const InteractionType = { PING: 1, APPLICATION_COMMAND: 2, MESSAGE_COMPONENT: 3 } as const;
-export const ResponseType = { PONG: 1, MESSAGE: 4, DEFERRED_MESSAGE: 5 } as const;
+export const InteractionType = { PING: 1, APPLICATION_COMMAND: 2, MESSAGE_COMPONENT: 3, AUTOCOMPLETE: 4 } as const;
+export const ResponseType = { PONG: 1, MESSAGE: 4, DEFERRED_MESSAGE: 5, AUTOCOMPLETE_RESULT: 8 } as const;
 export const EPHEMERAL = 1 << 6;
 
 const PERMISSION = { ADMINISTRATOR: 1n << 3n, MANAGE_MESSAGES: 1n << 13n };
@@ -18,7 +18,7 @@ export interface Interaction {
   data?: {
     name?: string;
     custom_id?: string;
-    options?: { name: string; type: number; value: string | number | boolean }[];
+    options?: { name: string; type: number; value: string | number | boolean; focused?: boolean }[];
   };
 }
 

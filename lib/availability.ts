@@ -136,3 +136,10 @@ export function findSlots(snapshot: Snapshot, ymd: string, size: Size, lengthMin
   }
   return slots.sort((a, b) => a.bestStart - b.bestStart || a.cost.totalCents - b.cost.totalCents);
 }
+
+/** True when every field in `resourceIds` is free for the whole game. */
+export function isOpen(snapshot: Snapshot, resourceIds: number[], ymd: string, startMinute: number, lengthMinutes: number): boolean {
+  return resourceIds.every((id) =>
+    (snapshot.byResource.get(id)?.[ymd] ?? []).some((w) => w.start <= startMinute && w.end >= startMinute + lengthMinutes),
+  );
+}

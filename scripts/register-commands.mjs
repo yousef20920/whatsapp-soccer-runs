@@ -7,6 +7,26 @@ const ORGANIZER = String(1n << 13n); // Manage Messages: Organizer role and admi
 
 const STRING = 3, INTEGER = 4, NUMBER = 10;
 
+// Mirrors lib/venues.ts: Active Mississauga resource ids for each quarter field.
+const VENUES = [
+  { name: "Churchill Meadows Dome", quarters: [[147, "F1"], [119, "F2"], [130, "F3"], [132, "F4"]] },
+  { name: "Paramount Dome", quarters: [[1192, "F1"], [1197, "F2"], [1196, "F3"], [1181, "F4"]] },
+  { name: "Paramount Sportsplex", quarters: [[1300, "A"], [1311, "B"], [1314, "C"], [1320, "D"]] },
+];
+const FIELD_CHOICES = VENUES.flatMap(({ name, quarters: q }) => [
+  { name: `${name} · ${q[0][1]}+${q[1][1]} (half)`, value: `${q[0][0]}.${q[1][0]}` },
+  { name: `${name} · ${q[2][1]}+${q[3][1]} (half)`, value: `${q[2][0]}.${q[3][0]}` },
+  { name: `${name} · full field`, value: q.map(([id]) => id).join(".") },
+  ...q.map(([id, label]) => ({ name: `${name} · ${label} (quarter)`, value: String(id) })),
+]);
+const FORMAT_CHOICES = ["11v11", "9v9", "8v8", "7v7", "6v6", "5v5"].map((f) => ({ name: f, value: f }));
+const LENGTH_CHOICES = [60, 90, 120].map((m) => ({ name: `${m} min`, value: m }));
+// 6 AM … 11 PM, so "7" can't be misread as 7 AM.
+const AFTER_CHOICES = Array.from({ length: 18 }, (_, i) => {
+  const h = i + 6;
+  return { name: `${h % 12 || 12} ${h < 12 ? "AM" : "PM"}`, value: `${h}:00` };
+});
+
 const commands = [
   { name: "ping", description: "Check that SORY is online" },
   {
@@ -30,7 +50,8 @@ const commands = [
     default_member_permissions: ORGANIZER,
     dm_permission: false,
     options: [
-      { type: STRING, name: "date", description: "One day, YYYY-MM-DD (default: the next 7 days)" },
+      { type: STRING, name: "from", description: "First day (default tomorrow)", autocomplete: true },
+      { type: STRING, name: "to", description: "Last day (default a week after from)", autocomplete: true },
       {
         type: STRING,
         name: "format",
@@ -54,8 +75,22 @@ const commands = [
           { name: "120 min", value: 120 },
         ],
       },
-      { type: STRING, name: "after", description: "Earliest start, EST (default 5pm)" },
+      { type: STRING, name: "after", description: "Earliest start, EST (default 5 PM)", choices: AFTER_CHOICES },
       { type: INTEGER, name: "players", description: "Players to split the cost (default: full teams, e.g. 14 for 7v7)", min_value: 2, max_value: 60 },
+    ],
+  },
+  {
+    name: "reserve",
+    description: "Save a field slot as a draft game and get the booking links (organizers)",
+    default_member_permissions: ORGANIZER,
+    dm_permission: false,
+    options: [
+      { type: STRING, name: "field", description: "Which field", required: true, choices: FIELD_CHOICES },
+      { type: STRING, name: "date", description: "Game day", required: true, autocomplete: true },
+      { type: STRING, name: "time", description: "Start, EST, e.g. 8pm or 20:00", required: true },
+      { type: STRING, name: "format", description: "Game size (default fits the field)", choices: FORMAT_CHOICES },
+      { type: INTEGER, name: "length", description: "Minutes (default 60)", choices: LENGTH_CHOICES },
+      { type: INTEGER, name: "players", description: "Players to split the cost (default: full teams)", min_value: 2, max_value: 60 },
     ],
   },
   {
