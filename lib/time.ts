@@ -22,11 +22,11 @@ export function parseTime(text: string): [number, number] | null {
   return hour <= 23 && minute <= 59 ? [hour, minute] : null;
 }
 
-/** "Sat, Nov 28 · 8:00 PM Toronto time" */
+/** "Sat, Nov 28 · 8:00 PM EST" (EDT during daylight saving) */
 export function torontoLabel(date: Date): string {
   const day = date.toLocaleDateString("en-US", { timeZone: ZONE, weekday: "short", month: "short", day: "numeric" });
-  const time = date.toLocaleTimeString("en-US", { timeZone: ZONE, hour: "numeric", minute: "2-digit" });
-  return `${day} · ${time} Toronto time`;
+  const time = date.toLocaleTimeString("en-US", { timeZone: ZONE, hour: "numeric", minute: "2-digit", timeZoneName: "short" });
+  return `${day} · ${time}`;
 }
 
 /** Minutes Toronto is ahead of UTC at a given instant (e.g. -300 in winter). */

@@ -18,7 +18,7 @@ const commands = [
       { type: STRING, name: "facility", description: "e.g. Churchill Meadows Dome", required: true, max_length: 100 },
       { type: STRING, name: "court", description: "e.g. Half field A", required: true, max_length: 50 },
       { type: STRING, name: "date", description: "YYYY-MM-DD, e.g. 2026-11-21", required: true },
-      { type: STRING, name: "time", description: "Kickoff, Toronto time, e.g. 20:00 or 8pm", required: true },
+      { type: STRING, name: "time", description: "Kickoff in Eastern time (EST), e.g. 20:00 or 8pm", required: true },
       { type: NUMBER, name: "field_cost", description: "Total field cost in dollars, tax included", required: true, min_value: 1 },
       { type: INTEGER, name: "max_players", description: "Roster size (default 18)", min_value: 2, max_value: 60 },
       { type: INTEGER, name: "duration", description: "Minutes (default 60)", min_value: 15, max_value: 300 },
