@@ -1,5 +1,5 @@
 import { waitUntil } from "@vercel/functions";
-import { confirmMatch, lobbyButton, newGame } from "../lib/commands.js";
+import { available, confirmMatch, lobbyButton, newGame } from "../lib/commands.js";
 import { editReply, EPHEMERAL, InteractionType, isValidSignature, json, ResponseType, type Interaction } from "../lib/discord.js";
 
 // Discord sends every slash command and button click here (the app's Interactions Endpoint URL).
@@ -23,6 +23,9 @@ export async function POST(request: Request): Promise<Response> {
           // Posting the lobby can take longer than Discord's 3-second window, so answer
           // "thinking…" now and finish in the background.
           waitUntil(confirmMatch(interaction).catch((err) => failLater(interaction, err)));
+          return json({ type: ResponseType.DEFERRED_MESSAGE, data: { flags: EPHEMERAL } });
+        case "available":
+          waitUntil(available(interaction).catch((err) => failLater(interaction, err)));
           return json({ type: ResponseType.DEFERRED_MESSAGE, data: { flags: EPHEMERAL } });
       }
     }

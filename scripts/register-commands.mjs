@@ -25,6 +25,40 @@ const commands = [
     ],
   },
   {
+    name: "available",
+    description: "Find open Mississauga turf to book (organizers)",
+    default_member_permissions: ORGANIZER,
+    dm_permission: false,
+    options: [
+      { type: STRING, name: "date", description: "One day, YYYY-MM-DD (default: the next 7 days)" },
+      {
+        type: STRING,
+        name: "format",
+        description: "Game size (default 9v9 on a half field)",
+        choices: [
+          { name: "11v11 · full field", value: "11v11" },
+          { name: "9v9 · half field", value: "9v9" },
+          { name: "8v8 · half field", value: "8v8" },
+          { name: "7v7 · quarter field", value: "7v7" },
+          { name: "6v6 · quarter field", value: "6v6" },
+          { name: "5v5 · quarter field", value: "5v5" },
+        ],
+      },
+      {
+        type: INTEGER,
+        name: "length",
+        description: "Minutes (default 60)",
+        choices: [
+          { name: "60 min", value: 60 },
+          { name: "90 min", value: 90 },
+          { name: "120 min", value: 120 },
+        ],
+      },
+      { type: STRING, name: "after", description: "Earliest start, EST (default 5pm)" },
+      { type: INTEGER, name: "players", description: "Players to split the cost (default: full teams, e.g. 14 for 7v7)", min_value: 2, max_value: 60 },
+    ],
+  },
+  {
     name: "confirm",
     description: "Open a booked game and post it in #games (organizers)",
     default_member_permissions: ORGANIZER,

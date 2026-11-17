@@ -2,7 +2,9 @@ import { sql, type Match, type Registration } from "./db.js";
 import { discord, displayName, editReply, EPHEMERAL, env, isOrganizer, option, type Interaction } from "./discord.js";
 import { lobbyMessage } from "./lobby.js";
 import { money, priceFor } from "./pricing.js";
-import { parseDate, parseTime, torontoLabel, torontoToDate } from "./time.js";
+import { addDays, dayLabel, parseDate, parseTime, shortTime, torontoLabel, torontoToDate, torontoToday } from "./time.js";
+import { findSlots, loadAvailability, type Size } from "./availability.js";
+import { bookingLink, dimensions, type Format, FORMATS } from "./venues.js";
 
 type Reply = { content: string; flags?: number };
 
@@ -68,6 +70,80 @@ export async function confirmMatch(interaction: Interaction): Promise<void> {
     UPDATE matches SET status = 'OPEN', channel_id = ${channelId}, message_id = ${message.id}
     WHERE match_id = ${matchId}`;
   await reply(`✅ Match #${matchId} is open and posted in <#${channelId}>.`);
+}
+
+const MAX_DAYS_SHOWN = 7;
+const MAX_SLOTS_SHOWN = 10; // ~350 characters per card; Discord allows 6000 per message
+
+/** /available: open Mississauga turf slots with total cost and per-player price. Runs after a deferred reply. */
+export async function available(interaction: Interaction): Promise<void> {
+  const reply = (body: object) => editReply(interaction, { allowed_mentions: { parse: [] }, ...body });
+  if (!isOrganizer(interaction)) return void (await reply({ content: "Only organizers can search for fields." }));
+
+  const format = (option<string>(interaction, "format") ?? "9v9") as Format;
+  const { size, perSide } = FORMATS[format] ?? FORMATS["9v9"];
+  const length = option<number>(interaction, "length") ?? DEFAULT_DURATION_MINUTES;
+  const players = option<number>(interaction, "players") ?? perSide * 2;
+  const afterText = option<string>(interaction, "after") ?? "5pm";
+  const dateText = option<string>(interaction, "date");
+
+  const after = parseTime(afterText);
+  if (!after) return void (await reply({ content: "I couldn't read that time. Use something like 5pm or 17:00." }));
+  const afterMinute = after[0] * 60 + after[1];
+
+  const today = torontoToday();
+  const first = addDays(today, 1), last = addDays(today, 30);
+  let dates: string[];
+  if (dateText) {
+    const parsed = parseDate(dateText);
+    if (!parsed) return void (await reply({ content: "I couldn't read that date. Use YYYY-MM-DD, like 2026-11-29." }));
+    const ymd = parsed.map((n, i) => String(n).padStart(i ? 2 : 4, "0")).join("-");
+    if (ymd < first || ymd > last) {
+      return void (await reply({ content: `Online booking only covers ${dayLabel(first)} to ${dayLabel(last)} (at least 24 hours and at most 30 days ahead).` }));
+    }
+    dates = [ymd];
+  } else {
+    dates = Array.from({ length: MAX_DAYS_SHOWN }, (_, i) => addDays(first, i));
+  }
+
+  const snapshot = await loadAvailability();
+  const found = dates.flatMap((ymd) => findSlots(snapshot, ymd, size, length, afterMinute).map((slot) => ({ ymd, slot })));
+  const sizeLabel = { quarter: "Quarter field", half: "Half field", full: "Full field" }[size];
+
+  // One short card per opening: when/where, price, then format and links.
+  const fields = found.slice(0, MAX_SLOTS_SHOWN).map(({ ymd, slot: s }) => {
+    const end = s.bestStart + length;
+    const perPlayer = priceFor(s.cost.totalCents, players).checkoutCents;
+    const links = [`[Book](${bookingLink(s.resourceIds[0])})`, ...s.venue.links.map((l) => `[${l.label}](${l.url})`)].join(" · ");
+    const widerWindow = s.open.start < s.bestStart || s.open.end > end ? ` · 🟢 open ${shortTime(s.open.start)}–${shortTime(s.open.end)}` : "";
+    const dims = `${dimensions(s.venue, size)}${s.venue.pitch.estimated ? " (est.)" : ""}`;
+    return {
+      name: `📅 ${dayLabel(ymd).replace(",", "")} · 🕐 ${shortTime(s.bestStart)}–${shortTime(end)} · 📍 ${s.venue.name} ${s.label}`,
+      value: [
+        `💵 **${money(perPlayer)}/player** · ${money(s.cost.totalCents)} total · ${s.cost.rate}`,
+        `⚽ ${format} · 📏 ${dims}${widerWindow}`,
+        `🔗 ${links}`,
+      ].join("\n"),
+    };
+  });
+
+  const range = dates.length === 1 ? dayLabel(dates[0]) : `${dayLabel(dates[0])} – ${dayLabel(dates[dates.length - 1])}`;
+  const more = found.length > MAX_SLOTS_SHOWN ? `\nShowing ${MAX_SLOTS_SHOWN} of ${found.length} · add \`date:\` for one day` : "";
+  const checked = Math.floor(snapshot.oldestFetch.getTime() / 1000);
+  await reply({
+    embeds: [
+      {
+        title: `🔎 ${found.length} open · ${range}`,
+        description: found.length
+          ? `${format} · ${sizeLabel.toLowerCase()} · ${length} min · after ${shortTime(afterMinute)} EST · ${players} players\n-# Price per player includes the card fee. Totals include HST. Resident rates.${more}`
+          : `No openings for ${format} after ${shortTime(afterMinute)}. Try another day, an earlier time, or a smaller format.`,
+        color: 0x3498db,
+        fields,
+        footer: { text: `Source: Active Mississauga${snapshot.stale ? " · ⚠️ some data may be out of date" : ""} · checked` },
+        timestamp: new Date(checked * 1000).toISOString(),
+      },
+    ],
+  });
 }
 
 /** Claim & Pay / Leave Match buttons. Payments arrive in the next build step. */
