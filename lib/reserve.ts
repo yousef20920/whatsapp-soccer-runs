@@ -2,7 +2,7 @@ import { isOpen, loadAvailability } from "./availability.js";
 import { sql, type Match } from "./db.js";
 import { editReply, isOrganizer, option, type Interaction } from "./discord.js";
 import { money, priceFor } from "./pricing.js";
-import { addDays, dayLabel, parseTime, resolveDate, shortTime, torontoToDate, torontoToday } from "./time.js";
+import { addDays, dayLabel, minuteLabel, parseTime, resolveDate, shortTime, torontoToDate, torontoToday } from "./time.js";
 import { bookingLink, DEFAULT_FORMAT, dimensions, fieldCost, type Format, FORMATS, sizeFor, venueFor } from "./venues.js";
 
 export interface ReserveRequest {
@@ -15,6 +15,24 @@ export interface ReserveRequest {
 }
 
 const MIN_NOTICE_MS = 24 * 60 * 60 * 1000;
+export const BOOKER_INSTALL_URL = "https://sory-five.vercel.app/booker/";
+
+/**
+ * Link that opens Active Mississauga and lets the SORY Booker extension fill in the whole booking
+ * (every quarter field, date, times, attendees, event details) up to the waivers, signature and payment.
+ */
+export function autofillLink(r: { resourceIds: number[]; ymd: string; startMinute: number; lengthMinutes: number; players: number; matchId: number }) {
+  const end = r.startMinute + r.lengthMinutes;
+  const plan = {
+    ids: r.resourceIds,
+    ymd: r.ymd,
+    start: minuteLabel(r.startMinute),
+    end: end >= 24 * 60 ? "11:59 PM" : minuteLabel(end), // the City's form ends a day at 11:59 PM
+    attendees: Math.min(Math.max(r.players, 5), 50),
+    name: `NASORY Runs · Match #${r.matchId}`,
+  };
+  return `${bookingLink(r.resourceIds[0])}#sory=${Buffer.from(JSON.stringify(plan)).toString("base64url")}`;
+}
 
 /** Reserve button on an /available card: "rsv:1192.1197:2026-11-19:1020:60:9v9:18" */
 export function reserveButtonId(r: Required<ReserveRequest>): string {
@@ -95,6 +113,7 @@ export async function reserve(interaction: Interaction, request: ReserveRequest 
     RETURNING *`;
 
   const bookLinks = resourceIds.map((id, i) => `[${labels[i]}](${bookingLink(id)})`).join(" · ");
+  const autofill = autofillLink({ resourceIds, ymd, startMinute, lengthMinutes, players, matchId: match.match_id });
   await reply(
     [
       `📝 **Draft Match #${match.match_id}** · not booked yet`,
@@ -103,8 +122,9 @@ export async function reserve(interaction: Interaction, request: ReserveRequest 
       `⚽ ${format} · ${players} players · 📏 ${dimensions(venue, size)}${venue.pitch.estimated ? " (est.)" : ""}`,
       ``,
       `**To book:**`,
-      `1️⃣ Book ${resourceIds.length > 1 ? `all ${resourceIds.length} fields` : "it"} on Active Mississauga: ${bookLinks}`,
-      `   ${dayLabel(ymd)}, ${shortTime(startMinute)}–${shortTime(end)}, ${Math.min(players, 50)} attendees`,
+      `1️⃣ **[🤖 Open the booking, filled in](${autofill})** on a computer`,
+      `   Then answer the 2 "I acknowledge" questions, tick the waivers, sign, Add to cart and pay.`,
+      `-# Needs the [SORY Booker extension](${BOOKER_INSTALL_URL}) (one-time install). Without it, book by hand: ${bookLinks}`,
       `2️⃣ Then run \`/confirm match:${match.match_id}\` to post it in #games`,
       `-# Anyone can still book this slot until you do, so book soon.`,
     ].join("\n"),

@@ -1,5 +1,6 @@
+import { createHash } from "node:crypto";
 import { sql, type Match, type Registration } from "./db.js";
-import { discord, displayName, editReply, EPHEMERAL, env, isOrganizer, option, type Interaction } from "./discord.js";
+import { deleteReply, discord, displayName, editReply, EPHEMERAL, env, isOrganizer, option, type Interaction } from "./discord.js";
 import { lobbyMessage } from "./lobby.js";
 import { money, priceFor } from "./pricing.js";
 import { addDays, dateChoices, dayLabel, parseDate, parseTime, resolveDate, shortTime, torontoLabel, torontoToDate, torontoToday } from "./time.js";
@@ -76,10 +77,13 @@ export async function confirmMatch(interaction: Interaction): Promise<void> {
 const DEFAULT_DAYS = 7;
 const MAX_SLOTS_SHOWN = 10; // ~350 characters per card; Discord allows 6000 per message
 
-/** /available: open Mississauga turf slots with total cost and per-player price. Runs after a deferred reply. */
+/**
+ * /available: open Mississauga turf with total cost and per-player price. Anyone can run it and the
+ * list is posted for everyone, but the same unchanged list is never posted twice in a channel.
+ * Runs after a private deferred reply, which carries errors and "no changes" notes.
+ */
 export async function available(interaction: Interaction): Promise<void> {
   const reply = (body: object) => editReply(interaction, { allowed_mentions: { parse: [] }, ...body });
-  if (!isOrganizer(interaction)) return void (await reply({ content: "Only organizers can search for fields." }));
 
   const format = (option<string>(interaction, "format") ?? "9v9") as Format;
   const { size, perSide } = FORMATS[format] ?? FORMATS["9v9"];
@@ -131,16 +135,17 @@ export async function available(interaction: Interaction): Promise<void> {
   const range = dates.length === 1 ? dayLabel(dates[0]) : `${dayLabel(dates[0])} – ${dayLabel(dates[dates.length - 1])}`;
   const more = found.length > MAX_SLOTS_SHOWN ? `\nShowing ${MAX_SLOTS_SHOWN} of ${found.length} · narrow \`from:\` and \`to:\`` : "";
   const checked = Math.floor(snapshot.oldestFetch.getTime() / 1000);
-  await reply({
+  const list = {
+    allowed_mentions: { parse: [] },
     embeds: [
       {
         title: `🔎 ${found.length} open · ${range}`,
         description: found.length
-          ? `${format} · ${sizeLabel.toLowerCase()} · ${length} min · after ${shortTime(afterMinute)} EST · ${players} players\n-# Price per player includes the card fee. Totals include HST. Resident rates.${more}`
+          ? `${format} · ${sizeLabel.toLowerCase()} · ${length} min · after ${shortTime(afterMinute)} EST · ${players} players\n-# Price per player includes the card fee. Totals include HST. Resident rates. Only organizers can reserve.${more}`
           : `No openings for ${format} after ${shortTime(afterMinute)}. Try another day, an earlier time, or a smaller format.`,
         color: 0x3498db,
         fields,
-        footer: { text: `Source: Active Mississauga${snapshot.stale ? " · ⚠️ some data may be out of date" : ""} · checked` },
+        footer: { text: `Asked by ${displayName(interaction)} · Source: Active Mississauga${snapshot.stale ? " · ⚠️ some data may be out of date" : ""} · checked` },
         timestamp: new Date(checked * 1000).toISOString(),
       },
     ],
@@ -154,7 +159,49 @@ export async function available(interaction: Interaction): Promise<void> {
       })),
       5,
     ).map((buttons) => ({ type: 1, components: buttons })),
-  });
+  };
+
+  // Same search, same openings and prices as the last list in this channel: point to it instead of reposting.
+  const searchKey = [format, length, afterMinute, players, from, to].join("|");
+  const resultsHash = createHash("sha256")
+    .update(JSON.stringify(found.map(({ ymd, slot: s }) => [ymd, s.resourceIds, s.bestStart, s.open, s.cost.totalCents])))
+    .digest("hex");
+  await postOnce(interaction, searchKey, resultsHash, list, reply);
+}
+
+/** Posts `list` in the channel unless the same search with the same results is already there. */
+async function postOnce(interaction: Interaction, searchKey: string, resultsHash: string, list: object, reply: (body: object) => Promise<unknown>) {
+  const channelId = interaction.channel_id!;
+  const [last] = await sql<{ results_hash: string; message_id: string }[]>`
+    SELECT results_hash, message_id FROM posted_lists WHERE channel_id = ${channelId} AND search_key = ${searchKey}`;
+  if (last?.results_hash === resultsHash && (await messageExists(channelId, last.message_id))) {
+    const link = `https://discord.com/channels/${interaction.guild_id}/${channelId}/${last.message_id}`;
+    return void (await reply({ content: `Nothing has changed since the last list, so I didn't post it again: ${link}` }));
+  }
+
+  let message: { id: string };
+  try {
+    message = await discord<{ id: string }>("POST", `/channels/${channelId}/messages`, list);
+  } catch (err) {
+    // No permission to post here: show the list to the person who asked instead.
+    console.error(err);
+    return void (await reply({ ...list, content: "-# I can't post in this channel, so only you can see this." }));
+  }
+  await sql`
+    INSERT INTO posted_lists (channel_id, search_key, results_hash, message_id, posted_at)
+    VALUES (${channelId}, ${searchKey}, ${resultsHash}, ${message.id}, now())
+    ON CONFLICT (channel_id, search_key) DO UPDATE
+      SET results_hash = EXCLUDED.results_hash, message_id = EXCLUDED.message_id, posted_at = EXCLUDED.posted_at`;
+  await deleteReply(interaction).catch(() => reply({ content: "✅ Posted." }));
+}
+
+async function messageExists(channelId: string, messageId: string): Promise<boolean> {
+  try {
+    await discord("GET", `/channels/${channelId}/messages/${messageId}`);
+    return true;
+  } catch {
+    return false; // deleted, or can't be read any more
+  }
 }
 
 /** Online booking on Active Mississauga: at least 24 hours and at most 30 days ahead. */

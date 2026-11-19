@@ -1,0 +1,56 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>SORY Booker</title>
+  <style>
+    :root { --bg: #f6f7fb; --card: #fff; --text: #1d2130; --muted: #5b6275; --accent: #4752c4; --line: #e3e6ef; }
+    @media (prefers-color-scheme: dark) {
+      :root { --bg: #15171e; --card: #1e212b; --text: #e8eaf2; --muted: #a2a8ba; --accent: #8c95ff; --line: #2d313e; }
+    }
+    * { box-sizing: border-box; }
+    body { margin: 0; background: var(--bg); color: var(--text); font: 16px/1.55 system-ui, -apple-system, Segoe UI, sans-serif; }
+    main { max-width: 640px; margin: 0 auto; padding: 40px 16px 64px; }
+    h1 { font-size: 28px; margin: 0 0 6px; }
+    .lead { color: var(--muted); margin: 0 0 28px; }
+    .card { background: var(--card); border: 1px solid var(--line); border-radius: 14px; padding: 20px 22px; margin-bottom: 18px; }
+    h2 { font-size: 17px; margin: 0 0 10px; }
+    ol { margin: 0; padding-left: 22px; }
+    li { margin: 6px 0; }
+    code { background: var(--bg); border: 1px solid var(--line); border-radius: 6px; padding: 1px 6px; font-size: 14px; }
+    .btn { display: inline-block; background: var(--accent); color: #fff; text-decoration: none; font-weight: 600; padding: 10px 18px; border-radius: 10px; margin-top: 4px; }
+    .muted { color: var(--muted); font-size: 14px; }
+  </style>
+</head>
+<body>
+<main>
+  <h1>SORY Booker</h1>
+  <p class="lead">Fills in Active Mississauga field bookings for you from SORY's Reserve links: every field, the date, times, attendees and event details. You still agree to the waivers, sign and pay yourself.</p>
+
+  <div class="card">
+    <h2>Install (one time, on a computer)</h2>
+    <ol>
+      <li><a class="btn" href="sory-booker.zip" download>Download SORY Booker</a></li>
+      <li>Open the downloaded file to unzip it. You'll get a <b>sory-booker</b> folder.</li>
+      <li>In Chrome, go to <code>chrome://extensions</code> and turn on <b>Developer mode</b> (top right).</li>
+      <li>Click <b>Load unpacked</b> and choose the <b>sory-booker</b> folder.</li>
+      <li>Sign in to <a href="https://anc.ca.apm.activecommunities.com/activemississauga/signin">Active Mississauga</a> in the same browser.</li>
+    </ol>
+    <p class="muted">Works in Chrome, Edge, Brave and Arc. Not on phones or Safari.</p>
+  </div>
+
+  <div class="card">
+    <h2>Booking a field</h2>
+    <ol>
+      <li>In Discord, press <b>Reserve</b> on an <code>/available</code> result (organizers only).</li>
+      <li>Click <b>🤖 Open the booking, filled in</b>. Keep the tab open while SORY works; it takes about 20 seconds.</li>
+      <li>When the green banner appears, answer the two "I acknowledge" questions, tick the waivers, sign, then <b>Add to cart</b> and pay.</li>
+      <li>Back in Discord, run <code>/confirm</code> to post the game.</li>
+    </ol>
+  </div>
+
+  <p class="muted">SORY Booker only runs on Active Mississauga pages, only when you open a SORY link, and never sends your information anywhere.</p>
+</main>
+</body>
+</html>

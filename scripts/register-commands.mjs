@@ -46,8 +46,7 @@ const commands = [
   },
   {
     name: "available",
-    description: "Find open Mississauga turf to book (organizers)",
-    default_member_permissions: ORGANIZER,
+    description: "Find open Mississauga turf (anyone; only organizers can reserve)",
     dm_permission: false,
     options: [
       { type: STRING, name: "from", description: "First day (default tomorrow)", autocomplete: true },

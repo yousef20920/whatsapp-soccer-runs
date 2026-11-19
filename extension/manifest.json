@@ -1,0 +1,14 @@
+{
+  "manifest_version": 3,
+  "name": "SORY Booker",
+  "version": "1.0.0",
+  "description": "Fills in Active Mississauga field bookings from SORY's Reserve links. You still agree to the waivers, sign and pay yourself.",
+  "content_scripts": [
+    {
+      "matches": ["https://anc.ca.apm.activecommunities.com/activemississauga/*"],
+      "js": ["booker.js"],
+      "run_at": "document_start",
+      "world": "MAIN"
+    }
+  ]
+}

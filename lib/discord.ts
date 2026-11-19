@@ -14,6 +14,7 @@ export interface Interaction {
   token: string;
   application_id: string;
   guild_id?: string;
+  channel_id?: string;
   member?: { user: { id: string; username: string; global_name?: string | null }; permissions: string; nick?: string | null };
   data?: {
     name?: string;
@@ -74,6 +75,11 @@ export async function discord<T = unknown>(method: string, path: string, body?: 
 /** Replaces the "SORY is thinking…" placeholder of a deferred reply. */
 export function editReply(interaction: Interaction, body: unknown) {
   return discord("PATCH", `/webhooks/${interaction.application_id}/${interaction.token}/messages/@original`, body, false);
+}
+
+/** Removes the private "SORY is thinking…" reply once the real answer is posted elsewhere. */
+export function deleteReply(interaction: Interaction) {
+  return discord("DELETE", `/webhooks/${interaction.application_id}/${interaction.token}/messages/@original`, undefined, false);
 }
 
 export function env(name: string): string {

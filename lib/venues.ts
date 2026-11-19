@@ -139,11 +139,15 @@ export const bookingLink = (resourceId: number) =>
 export interface FieldCost {
   subtotalCents: number;
   hstCents: number;
+  cityFeeCents: number;
   totalCents: number;
   rate: "peak" | "off-peak" | "part peak";
 }
 
 /** Cost for `quarters` quarter fields from startMinute for lengthMinutes, with the HST split out. */
+/** Untaxed fee the City adds per quarter field booked when the purpose is "Soccer" (seen at checkout, Nov 2026). */
+const SOCCER_FEE_CENTS_PER_FIELD = 267;
+
 export function fieldCost(venue: Venue, ymd: string, startMinute: number, lengthMinutes: number, quarters: number): FieldCost {
   let cents = 0;
   let peakSlices = 0, slices = 0;
@@ -155,7 +159,8 @@ export function fieldCost(venue: Venue, ymd: string, startMinute: number, length
   const subtotalCents = Math.round(cents);
   const hstCents = Math.round(subtotalCents * HST);
   const rate = peakSlices === 0 ? "off-peak" : peakSlices === slices ? "peak" : "part peak";
-  return { subtotalCents, hstCents, totalCents: subtotalCents + hstCents, rate };
+  const cityFeeCents = SOCCER_FEE_CENTS_PER_FIELD * quarters;
+  return { subtotalCents, hstCents, cityFeeCents, totalCents: subtotalCents + hstCents + cityFeeCents, rate };
 }
 
 /** The venue that owns these quarter fields, if they all belong to one venue. */
