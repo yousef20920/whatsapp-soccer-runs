@@ -3,7 +3,7 @@ import { createPublicKey, verify } from "node:crypto";
 const API = "https://discord.com/api/v10";
 
 export const InteractionType = { PING: 1, APPLICATION_COMMAND: 2, MESSAGE_COMPONENT: 3, AUTOCOMPLETE: 4 } as const;
-export const ResponseType = { PONG: 1, MESSAGE: 4, DEFERRED_MESSAGE: 5, AUTOCOMPLETE_RESULT: 8 } as const;
+export const ResponseType = { PONG: 1, MESSAGE: 4, DEFERRED_MESSAGE: 5, DEFERRED_UPDATE: 6, UPDATE_MESSAGE: 7, AUTOCOMPLETE_RESULT: 8 } as const;
 export const EPHEMERAL = 1 << 6;
 
 const PERMISSION = { ADMINISTRATOR: 1n << 3n, MANAGE_MESSAGES: 1n << 13n };
@@ -15,12 +15,19 @@ export interface Interaction {
   application_id: string;
   guild_id?: string;
   channel_id?: string;
-  member?: { user: { id: string; username: string; global_name?: string | null }; permissions: string; nick?: string | null };
+  member?: { user: DiscordUser; permissions: string; nick?: string | null };
+  user?: DiscordUser; // set instead of member in DMs
   data?: {
     name?: string;
     custom_id?: string;
     options?: { name: string; type: number; value: string | number | boolean; focused?: boolean }[];
   };
+}
+
+interface DiscordUser {
+  id: string;
+  username: string;
+  global_name?: string | null;
 }
 
 let publicKey: ReturnType<typeof createPublicKey> | undefined;
@@ -50,8 +57,13 @@ export function option<T extends string | number | boolean>(interaction: Interac
 }
 
 export function displayName(interaction: Interaction): string {
-  const m = interaction.member;
-  return m?.nick ?? m?.user.global_name ?? m?.user.username ?? "unknown";
+  const user = interaction.member?.user ?? interaction.user;
+  return interaction.member?.nick ?? user?.global_name ?? user?.username ?? "unknown";
+}
+
+/** Who pressed the button, in a server or in a DM. */
+export function playerOf(interaction: Interaction): { id: string; name: string } {
+  return { id: (interaction.member?.user ?? interaction.user)!.id, name: displayName(interaction) };
 }
 
 export function json(body: unknown, status = 200): Response {

@@ -29,4 +29,7 @@ export interface Registration {
   discord_user_id: string;
   discord_username: string;
   status: "PENDING" | "CONFIRMED" | "WAITLIST" | "CANCELLED";
+  hold_expires_at: Date | null;
+  offered_at: Date | null;
+  paid_at: Date | null;
 }

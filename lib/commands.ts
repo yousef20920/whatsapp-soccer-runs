@@ -1,7 +1,8 @@
 import { createHash } from "node:crypto";
-import { sql, type Match, type Registration } from "./db.js";
+import { sql, type Match } from "./db.js";
 import { deleteReply, discord, displayName, editReply, EPHEMERAL, env, isOrganizer, option, type Interaction } from "./discord.js";
 import { lobbyMessage } from "./lobby.js";
+import { rosterOf, rosterReport } from "./roster.js";
 import { money, priceFor } from "./pricing.js";
 import { addDays, dateChoices, dayLabel, parseDate, parseTime, resolveDate, shortTime, torontoLabel, torontoToDate, torontoToday } from "./time.js";
 import { findSlots, loadAvailability, type Size } from "./availability.js";
@@ -62,9 +63,7 @@ export async function confirmMatch(interaction: Interaction): Promise<void> {
   if (new Date(match.kickoff_time).getTime() <= Date.now()) return void (await reply(`Match #${matchId} has already started.`));
 
   const opened: Match = { ...match, status: "OPEN" };
-  const registrations = await sql<Registration[]>`
-    SELECT discord_user_id, discord_username, status FROM registrations
-    WHERE match_id = ${matchId} ORDER BY created_at`;
+  const registrations = await rosterOf(matchId);
   const channelId = env("GAMES_CHANNEL_ID");
   const message = await discord<{ id: string }>("POST", `/channels/${channelId}/messages`, lobbyMessage(opened, registrations));
 
@@ -230,13 +229,10 @@ function chunk<T>(items: T[], size: number): T[][] {
   return Array.from({ length: Math.ceil(items.length / size) }, (_, i) => items.slice(i * size, i * size + size));
 }
 
-/** Claim & Pay / Leave Match buttons. Payments arrive in the next build step. */
-export function lobbyButton(interaction: Interaction): Reply {
-  const [action] = (interaction.data?.custom_id ?? "").split(":");
-  const name = displayName(interaction);
-  if (action === "claim") return privateReply(`Thanks ${name}! Payments aren't switched on yet. They're coming in the next update.`);
-  if (action === "leave") return privateReply("You're not on this game's roster.");
-  return privateReply("That button isn't recognized.");
+/** /roster: the full roster with payments, privately. Organizers only. */
+export async function roster(interaction: Interaction): Promise<Reply> {
+  if (!isOrganizer(interaction)) return privateReply("Only organizers can see the full roster.");
+  return privateReply(await rosterReport(option<number>(interaction, "match")!));
 }
 
 function privateReply(content: string): Reply {

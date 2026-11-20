@@ -1,7 +1,8 @@
 import { waitUntil } from "@vercel/functions";
-import { available, confirmMatch, dateAutocomplete, lobbyButton, newGame } from "../lib/commands.js";
+import { available, confirmMatch, dateAutocomplete, newGame, roster } from "../lib/commands.js";
+import { claim, leave, leaveConfirmed, pay, type Result } from "../lib/roster.js";
 import { parseReserveButton, parseReserveCommand, reserve } from "../lib/reserve.js";
-import { editReply, EPHEMERAL, InteractionType, isValidSignature, json, ResponseType, type Interaction } from "../lib/discord.js";
+import { editReply, EPHEMERAL, InteractionType, isValidSignature, json, playerOf, ResponseType, type Interaction } from "../lib/discord.js";
 
 // Discord sends every slash command and button click here (the app's Interactions Endpoint URL).
 export async function POST(request: Request): Promise<Response> {
@@ -33,6 +34,8 @@ export async function POST(request: Request): Promise<Response> {
         case "available":
           waitUntil(available(interaction).catch((err) => failLater(interaction, err)));
           return json({ type: ResponseType.DEFERRED_MESSAGE, data: { flags: EPHEMERAL } });
+        case "roster":
+          return message(await roster(interaction));
         case "reserve":
           waitUntil(reserve(interaction, parseReserveCommand(interaction)).catch((err) => failLater(interaction, err)));
           return json({ type: ResponseType.DEFERRED_MESSAGE, data: { flags: EPHEMERAL } });
@@ -45,7 +48,7 @@ export async function POST(request: Request): Promise<Response> {
         waitUntil(reserve(interaction, reserveRequest).catch((err) => failLater(interaction, err)));
         return json({ type: ResponseType.DEFERRED_MESSAGE, data: { flags: EPHEMERAL } });
       }
-      return message(lobbyButton(interaction));
+      return gameButton(interaction);
     }
   } catch (err) {
     console.error(err);
@@ -53,6 +56,39 @@ export async function POST(request: Request): Promise<Response> {
   }
 
   return message({ content: "I don't know that command yet.", flags: EPHEMERAL });
+}
+
+/**
+ * Buttons on a game. claim/leave are on the public lobby, so they answer privately; pay/drop/
+ * leave-yes/stay are on SORY's private prompts or DMs, so they update that prompt in place.
+ */
+function gameButton(interaction: Interaction): Response {
+  const [action, id] = (interaction.data?.custom_id ?? "").split(":");
+  const matchId = Number(id);
+  const player = playerOf(interaction);
+  const run = (work: () => Promise<Result>, update: boolean) => {
+    waitUntil(
+      work()
+        .then((r) => editReply(interaction, { content: r.content, components: r.components ?? (update ? [] : undefined), allowed_mentions: { parse: [] } }))
+        .catch((err) => failLater(interaction, err)),
+    );
+    return json(update ? { type: ResponseType.DEFERRED_UPDATE } : { type: ResponseType.DEFERRED_MESSAGE, data: { flags: EPHEMERAL } });
+  };
+  switch (action) {
+    case "claim":
+      return run(() => claim(matchId, player), false);
+    case "leave":
+      return run(() => leave(matchId, player), false);
+    case "pay":
+      return run(() => pay(matchId, player), true);
+    case "drop":
+      return run(() => leave(matchId, player), true);
+    case "leave-yes":
+      return run(() => leaveConfirmed(matchId, player), true);
+    case "stay":
+      return json({ type: ResponseType.UPDATE_MESSAGE, data: { content: "👍 You're still in.", components: [] } });
+  }
+  return message({ content: "That button isn't recognized.", flags: EPHEMERAL });
 }
 
 function message(data: { content: string; flags?: number }) {

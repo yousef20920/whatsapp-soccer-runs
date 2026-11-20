@@ -99,6 +99,13 @@ const commands = [
     dm_permission: false,
     options: [{ type: INTEGER, name: "match", description: "Match number from /newgame", required: true, min_value: 1 }],
   },
+  {
+    name: "roster",
+    description: "See who's paid, on hold, waitlisted or left, with money in and out (organizers)",
+    default_member_permissions: ORGANIZER,
+    dm_permission: false,
+    options: [{ type: INTEGER, name: "match", description: "Match number", required: true, min_value: 1 }],
+  },
 ];
 
 async function api(method, path, body) {

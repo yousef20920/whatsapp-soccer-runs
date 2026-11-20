@@ -13,4 +13,12 @@ export function priceFor(fieldCostCents: number, maxPlayers: number) {
   return { baseCents, checkoutCents };
 }
 
+/** Players can leave (and get refunded) up to this many hours before kickoff. */
+export const LEAVE_CUTOFF_HOURS = 2;
+
+/** Stripe's fee on a card payment, kept back when a player leaves and is refunded. */
+export function cardFeeCents(paidCents: number): number {
+  return paidCents > 0 ? Math.round(paidCents * STRIPE_PERCENT) + STRIPE_FIXED_CENTS : 0;
+}
+
 export const money = (cents: number) => `$${(cents / 100).toFixed(2)}`;
