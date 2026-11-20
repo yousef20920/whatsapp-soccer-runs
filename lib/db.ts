@@ -23,6 +23,7 @@ export interface Match {
   channel_id: string | null;
   message_id: string | null;
   created_by: string;
+  poll_id: number | null; // the poll this game came from
 }
 
 export interface Registration {

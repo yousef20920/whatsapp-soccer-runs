@@ -1,7 +1,8 @@
-import { sql } from "./db.js";
+import { sql, type Match } from "./db.js";
 import { discord, editReply, env, followUpPrivately, option, playerOf, type Interaction } from "./discord.js";
 import { addList } from "./lobby.js";
-import { addDays, dayLabel, resolveDate, torontoToday } from "./time.js";
+import { money } from "./pricing.js";
+import { addDays, dayLabel, resolveDate, torontoLabel, torontoToday } from "./time.js";
 
 // "Who wants to play?" polls. Anyone picks a day; players tap I'm in / Can't make it.
 // Once POLL_MIN_PLAYERS are in, organizers are told to book a field. No field, time or price is shown.
@@ -16,6 +17,7 @@ interface Poll {
   message_id: string | null;
   created_by: string;
   ready_at: Date | null;
+  match_id: number | null; // the game booked from this poll
 }
 interface Vote {
   discord_user_id: string;
@@ -23,17 +25,21 @@ interface Vote {
 }
 
 // Read DATE columns as plain "YYYY-MM-DD" text, not a Date at UTC midnight.
-const POLL_COLUMNS = sql`poll_id, game_day::text AS game_day, status, channel_id, message_id, created_by, ready_at`;
-const pollLink = (p: Poll) => `https://discord.com/channels/${env("DISCORD_GUILD_ID")}/${p.channel_id}/${p.message_id}`;
+const POLL_COLUMNS = sql`poll_id, game_day::text AS game_day, status, channel_id, message_id, created_by, ready_at, match_id`;
+const messageLink = (channelId: string | null, messageId: string | null) =>
+  `https://discord.com/channels/${env("DISCORD_GUILD_ID")}/${channelId}/${messageId}`;
+const pollLink = (p: Poll) => messageLink(p.channel_id, p.message_id);
 
-function pollMessage(poll: Poll, votes: Vote[]) {
+function pollMessage(poll: Poll, votes: Vote[], gameLink?: string) {
   const ins = votes.filter((v) => v.answer === "IN");
   const outs = votes.filter((v) => v.answer === "OUT");
   const open = poll.status === "OPEN";
   const ready = ins.length >= POLL_MIN_PLAYERS;
   const day = dayLabel(poll.game_day);
 
-  const description = !open
+  const description = gameLink
+    ? `⚽ **Game on!** [Claim your spot here](${gameLink}). Everyone who said I'm in got a DM.`
+    : !open
     ? "This poll is closed."
     : ready
       ? `✅ **Enough players!** Organizers will book a field and post the game in #games. Still tap **I'm in** if you want to play.`
@@ -148,4 +154,60 @@ export async function closeOldPolls(): Promise<number> {
     );
   }
   return closed.length;
+}
+
+/** The open poll for a day (YYYY-MM-DD) and who said I'm in, or null if there isn't one. */
+export async function pollForDay(ymd: string): Promise<{ poll: Poll; voterIds: string[] } | null> {
+  const [poll] = await sql<Poll[]>`SELECT ${POLL_COLUMNS} FROM polls WHERE game_day = ${ymd} AND status = 'OPEN'`;
+  if (!poll) return null;
+  const voterIds = (await votesOf(poll.poll_id)).filter((v) => v.answer === "IN").map((v) => v.discord_user_id);
+  return { poll, voterIds };
+}
+
+/**
+ * After /confirm posts a game on a poll's day: closes the poll with a link to the game and DMs every
+ * "I'm in" voter a Claim & Pay button (no priority: spots stay first come, first served). Voters with DMs off are mentioned in #games.
+ * Returns how many were DMed.
+ */
+export async function invitePollVoters(poll: Poll, match: Match, voterIds: string[]): Promise<number> {
+  const gameLink = messageLink(match.channel_id, match.message_id);
+  const [closed] = await sql<Poll[]>`
+    UPDATE polls SET status = 'CLOSED', match_id = ${match.match_id} WHERE poll_id = ${poll.poll_id} RETURNING ${POLL_COLUMNS}`;
+  if (closed.message_id) {
+    await discord("PATCH", `/channels/${closed.channel_id}/messages/${closed.message_id}`, pollMessage(closed, await votesOf(poll.poll_id), gameLink)).catch(
+      (err) => console.error(`Couldn't update Poll #${poll.poll_id}`, err),
+    );
+  }
+  if (!voterIds.length) return 0;
+
+  const price = money(match.checkout_price_cents);
+  const invite = {
+    content: [
+      `⚽ **Game on for ${dayLabel(poll.game_day)}!** You said you're in on the poll, so here it is.`,
+      `📍 ${match.facility_name} · ${match.court_name}`,
+      `🕐 ${torontoLabel(new Date(match.kickoff_time))} · ${match.duration_minutes} min · 💵 ${price}`,
+      `Spots are first come, first served. [See the game](${gameLink})`,
+    ].join("\n"),
+    components: [{ type: 1, components: [{ type: 2, style: 3, label: `Claim & Pay (${price})`, custom_id: `claim:${match.match_id}` }] }],
+    allowed_mentions: { parse: [] },
+  };
+
+  const unreachable: string[] = [];
+  let dmed = 0;
+  for (const userId of voterIds) {
+    try {
+      const dm = await discord<{ id: string }>("POST", "/users/@me/channels", { recipient_id: userId });
+      await discord("POST", `/channels/${dm.id}/messages`, invite);
+      dmed++;
+    } catch {
+      unreachable.push(userId);
+    }
+  }
+  if (unreachable.length) {
+    await discord("POST", `/channels/${match.channel_id}/messages`, {
+      content: `${unreachable.map((id) => `<@${id}>`).join(" ")} the game you voted for is up. Spots are first come, first served: ${gameLink}`,
+      allowed_mentions: { users: unreachable.slice(0, 100) },
+    }).catch((err) => console.error("Couldn't mention poll voters", err));
+  }
+  return dmed;
 }

@@ -3,6 +3,7 @@ import { sql, type Match } from "./db.js";
 import { deleteReply, discord, displayName, editReply, EPHEMERAL, env, isOrganizer, option, type Interaction } from "./discord.js";
 import { lobbyMessage } from "./lobby.js";
 import { rosterOf, rosterReport } from "./roster.js";
+import { invitePollVoters, pollForDay } from "./polls.js";
 import { money, priceFor } from "./pricing.js";
 import { addDays, dateChoices, dayLabel, parseDate, parseTime, resolveDate, shortTime, torontoLabel, torontoToDate, torontoToday } from "./time.js";
 import { findSlots, loadAvailability, type Size } from "./availability.js";
@@ -62,15 +63,28 @@ export async function confirmMatch(interaction: Interaction): Promise<void> {
   if (match.status !== "DRAFT") return void (await reply(`Match #${matchId} is already ${match.status.toLowerCase()}.`));
   if (new Date(match.kickoff_time).getTime() <= Date.now()) return void (await reply(`Match #${matchId} has already started.`));
 
-  const opened: Match = { ...match, status: "OPEN" };
-  const registrations = await rosterOf(matchId);
+  // A poll for the same day? Its "I'm in" voters get a DM once the game is posted.
+  const fromPoll = await pollForDay(torontoToday(new Date(match.kickoff_time)));
+
   const channelId = env("GAMES_CHANNEL_ID");
-  const message = await discord<{ id: string }>("POST", `/channels/${channelId}/messages`, lobbyMessage(opened, registrations));
+  const opened: Match = { ...match, status: "OPEN", channel_id: channelId, poll_id: fromPoll?.poll.poll_id ?? null };
+  const message = await discord<{ id: string }>("POST", `/channels/${channelId}/messages`, lobbyMessage(opened, await rosterOf(matchId)));
+  opened.message_id = message.id;
 
   await sql`
-    UPDATE matches SET status = 'OPEN', channel_id = ${channelId}, message_id = ${message.id}
+    UPDATE matches SET status = 'OPEN', channel_id = ${channelId}, message_id = ${message.id},
+                       poll_id = ${opened.poll_id}
     WHERE match_id = ${matchId}`;
-  await reply(`✅ Match #${matchId} is open and posted in <#${channelId}>.`);
+
+  let note = "";
+  if (fromPoll) {
+    const dmed = await invitePollVoters(fromPoll.poll, opened, fromPoll.voterIds);
+    const total = fromPoll.voterIds.length;
+    note = total
+      ? `\n🗳️ Told ${total === 1 ? "the 1 poll voter" : `the ${total} poll voters`} who said I'm in (${dmed} by DM${dmed < total ? `, ${total - dmed} mentioned in the channel` : ""}).`
+      : `\n🗳️ Closed the poll for that day (no one had said I'm in).`;
+  }
+  await reply(`✅ Match #${matchId} is open and posted in <#${channelId}>.${note}`);
 }
 
 const DEFAULT_DAYS = 7;
