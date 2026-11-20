@@ -105,9 +105,23 @@
   // ----- steps -----
   const detailUrl = (id) => `${BASE}/detail/${id}`;
 
+  // The site can reset the attendee count to 1 while it finishes loading, so set it and check it stuck.
+  const attendeesBox = () => document.querySelector('input[aria-label="Number of attendees"]');
+  async function setAttendees(plan) {
+    const want = String(plan.attendees);
+    for (let i = 0; i < 4; i++) {
+      const box = attendeesBox();
+      if (!box) return false;
+      if (box.value === want) return true;
+      setInput(box, want);
+      await sleep(500);
+    }
+    return attendeesBox()?.value === want;
+  }
+
   async function fillDetail(plan, id) {
-    const attendees = await waitFor(() => document.querySelector('input[aria-label="Number of attendees"]'));
-    if (!attendees) {
+    const attendees = await waitFor(attendeesBox);
+    if (!attendees || pageHas(/sign in to re-check availability/i)) {
       banner("Sign in (top right) to continue. SORY carries on after you sign in.");
       return "wait";
     }
@@ -123,8 +137,8 @@
     }
 
     banner(`Filling in field ${plan.next + 1} of ${plan.ids.length}…`);
-    setInput(attendees, String(plan.attendees));
-    await sleep(300);
+    await sleep(1000); // let the page finish loading before typing into it
+    await setAttendees(plan);
     for (const x of document.querySelectorAll('a[aria-label^="Delete the date and time"]')) {
       x.click();
       await sleep(400);
@@ -155,10 +169,16 @@
     const status = chip?.getAttribute("aria-label") || "";
     if (!/Available$/.test(status)) return fail("This time isn't available any more. Run /available in Discord for current openings.");
 
-    save({ ...plan, next: plan.next + 1 });
-    byText("button,a", "Proceed")?.click();
-    await waitFor(() => /\/form\//.test(location.pathname), 10000);
-    return "next";
+    // Check the attendee count once more right before Proceed, and retry if the City rejects it.
+    for (let attempt = 0; attempt < 2; attempt++) {
+      if (!(await setAttendees(plan))) return fail(`Couldn't set attendees to ${plan.attendees}. Type it in the box and press Proceed.`);
+      save({ ...plan, next: plan.next + 1 });
+      byText("button,a", "Proceed")?.click();
+      const moved = await waitFor(() => /\/form\//.test(location.pathname) || pageHas(/valid number for attendees/i), 10000);
+      if (moved && /\/form\//.test(location.pathname)) return "next";
+      save(plan); // still on this page: don't count this field as done
+    }
+    return fail(`The City didn't accept ${plan.attendees} attendees. Type it in the box and press Proceed.`);
   }
 
   async function fillEventDetails(plan) {
