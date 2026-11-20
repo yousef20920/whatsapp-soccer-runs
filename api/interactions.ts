@@ -1,6 +1,7 @@
 import { waitUntil } from "@vercel/functions";
 import { available, confirmMatch, dateAutocomplete, newGame, roster } from "../lib/commands.js";
 import { claim, leave, leaveConfirmed, pay, type Result } from "../lib/roster.js";
+import { startPoll, vote } from "../lib/polls.js";
 import { parseReserveButton, parseReserveCommand, reserve } from "../lib/reserve.js";
 import { editReply, EPHEMERAL, InteractionType, isValidSignature, json, playerOf, ResponseType, type Interaction } from "../lib/discord.js";
 
@@ -34,6 +35,9 @@ export async function POST(request: Request): Promise<Response> {
         case "available":
           waitUntil(available(interaction).catch((err) => failLater(interaction, err)));
           return json({ type: ResponseType.DEFERRED_MESSAGE, data: { flags: EPHEMERAL } });
+        case "poll":
+          waitUntil(startPoll(interaction).catch((err) => failLater(interaction, err)));
+          return json({ type: ResponseType.DEFERRED_MESSAGE, data: { flags: EPHEMERAL } });
         case "roster":
           return message(await roster(interaction));
         case "reserve":
@@ -64,6 +68,10 @@ export async function POST(request: Request): Promise<Response> {
  */
 function gameButton(interaction: Interaction): Response {
   const [action, id] = (interaction.data?.custom_id ?? "").split(":");
+  if (action === "poll-in" || action === "poll-out") {
+    waitUntil(vote(interaction, Number(id), action === "poll-in" ? "IN" : "OUT").catch((err) => console.error("Vote failed", err)));
+    return json({ type: ResponseType.DEFERRED_UPDATE });
+  }
   const matchId = Number(id);
   const player = playerOf(interaction);
   const run = (work: () => Promise<Result>, update: boolean) => {

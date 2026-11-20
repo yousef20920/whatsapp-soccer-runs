@@ -89,6 +89,11 @@ export function editReply(interaction: Interaction, body: unknown) {
   return discord("PATCH", `/webhooks/${interaction.application_id}/${interaction.token}/messages/@original`, body, false);
 }
 
+/** A private extra message after the first reply (e.g. after a button quietly updated a public card). */
+export function followUpPrivately(interaction: Interaction, content: string) {
+  return discord("POST", `/webhooks/${interaction.application_id}/${interaction.token}`, { content, flags: EPHEMERAL, allowed_mentions: { parse: [] } }, false);
+}
+
 /** Removes the private "SORY is thinking…" reply once the real answer is posted elsewhere. */
 export function deleteReply(interaction: Interaction) {
   return discord("DELETE", `/webhooks/${interaction.application_id}/${interaction.token}/messages/@original`, undefined, false);

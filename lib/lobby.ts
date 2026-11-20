@@ -47,7 +47,8 @@ export function lobbyMessage(match: Match, registrations: Registration[]) {
   };
 }
 
-function addList(fields: { name: string; value: string }[], name: string, lines: string[], empty = "-") {
+/** Adds a numbered list as one or more embed fields (Discord caps a field at 1024 characters). */
+export function addList(fields: { name: string; value: string }[], name: string, lines: string[], empty = "-") {
   if (!lines.length) return void fields.push({ name, value: empty });
   for (let i = 0; i < lines.length; i += PER_FIELD) {
     fields.push({ name: i === 0 ? name : "​", value: lines.slice(i, i + PER_FIELD).join("\n") });

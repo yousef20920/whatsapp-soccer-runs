@@ -100,6 +100,12 @@ const commands = [
     options: [{ type: INTEGER, name: "match", description: "Match number from /newgame", required: true, min_value: 1 }],
   },
   {
+    name: "poll",
+    description: "Ask who wants to play on a day. Organizers book once 12 are in.",
+    dm_permission: false,
+    options: [{ type: STRING, name: "day", description: "Game day", required: true, autocomplete: true }],
+  },
+  {
     name: "roster",
     description: "See who's paid, on hold, waitlisted or left, with money in and out (organizers)",
     default_member_permissions: ORGANIZER,
