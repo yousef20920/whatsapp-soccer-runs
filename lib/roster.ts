@@ -102,8 +102,12 @@ async function paidSoFar(tx: Tx, matchId: number, userId: string): Promise<numbe
   return cents;
 }
 
+function cancelledText(match: Match): string {
+  return `❌ This game was cancelled${match.cancel_reason ? ` (${match.cancel_reason})` : ""}. Everyone who paid was refunded in full.`;
+}
+
 function closedText(match: Match): string {
-  if (match.status === "CANCELLED") return "This game was cancelled.";
+  if (match.status === "CANCELLED") return cancelledText(match);
   if (match.status === "DRAFT") return "This game isn't open yet.";
   return "This game has started, so the roster is closed.";
 }
@@ -159,6 +163,7 @@ export function claim(matchId: number, player: Player): Promise<Result> {
 /** Pay on a held spot. A test payment for now; Stripe Checkout replaces this. */
 export function pay(matchId: number, player: Player): Promise<Result> {
   return withGame(matchId, async (tx, match, fx) => {
+    if (match.status === "CANCELLED") return { content: cancelledText(match), components: [] };
     const reg = await registrationOf(tx, matchId, player.id);
     if (reg?.status === "CONFIRMED") return { content: "✅ You've already paid. You're in this game.", components: [] };
     if (reg?.status !== "PENDING") {
@@ -190,6 +195,7 @@ export function pay(matchId: number, player: Player): Promise<Result> {
 /** Leave Match, Cancel or No thanks. Paid players are asked to confirm first (see leaveConfirmed). */
 export function leave(matchId: number, player: Player): Promise<Result> {
   return withGame(matchId, async (tx, match, fx) => {
+    if (match.status === "CANCELLED") return { content: cancelledText(match), components: [] };
     const reg = await registrationOf(tx, matchId, player.id);
     if (!reg || reg.status === "CANCELLED") return { content: "You're not on this game's roster.", components: [] };
 
@@ -227,6 +233,7 @@ export function leave(matchId: number, player: Player): Promise<Result> {
 /** "Yes, leave" from the confirmation: refund minus the card fee and pass the spot on. */
 export function leaveConfirmed(matchId: number, player: Player): Promise<Result> {
   return withGame(matchId, async (tx, match, fx) => {
+    if (match.status === "CANCELLED") return { content: cancelledText(match), components: [] };
     const reg = await registrationOf(tx, matchId, player.id);
     if (reg?.status !== "CONFIRMED") return { content: "You're not on this game's roster.", components: [] };
     const late = cutoffPassed(match);
@@ -364,4 +371,96 @@ export async function rosterReport(matchId: number): Promise<string> {
     `💵 Collected **${money(totalIn - totalOut)}** (${money(totalIn)} in, ${money(totalOut)} refunded) · field costs ${money(match.field_cost_cents)}`,
     testNote,
   ].join("\n");
+}
+
+/** What cancelling would do, for the organizer's "are you sure?" prompt. */
+export async function cancelPreview(matchId: number): Promise<{ match: Match; paidPlayers: number; refundCents: number; others: number } | null> {
+  const [match] = await sql<Match[]>`SELECT * FROM matches WHERE match_id = ${matchId}`;
+  if (!match) return null;
+  const [row] = await sql<{ paid_players: number; refund: number; others: number }[]>`
+    SELECT
+      (SELECT count(*)::int FROM registrations WHERE match_id = ${matchId} AND status = 'CONFIRMED') AS paid_players,
+      (SELECT coalesce(sum(CASE WHEN p.kind = 'PAYMENT' THEN p.amount_cents ELSE -p.amount_cents END), 0)::int
+         FROM payments p JOIN registrations r ON r.match_id = p.match_id AND r.discord_user_id = p.discord_user_id
+         WHERE p.match_id = ${matchId} AND r.status <> 'CANCELLED') AS refund, -- players who already left keep their earlier refund
+      (SELECT count(*)::int FROM registrations WHERE match_id = ${matchId} AND status IN ('PENDING', 'WAITLIST')) AS others`;
+  return { match, paidPlayers: row.paid_players, refundCents: row.refund, others: row.others };
+}
+
+/**
+ * Cancels a game: everyone who paid gets back everything they paid for it (card fee included),
+ * holds and the waitlist are cleared, the card turns grey and every player is told why.
+ */
+export async function cancelGame(matchId: number, reason: string | null): Promise<string> {
+  type Affected = { discord_user_id: string; status: Registration["status"]; refund: number };
+  let match: Match | undefined;
+  let affected: Affected[] = [];
+  const problem = (await sql.begin(async (tx) => {
+    [match] = await tx<Match[]>`SELECT * FROM matches WHERE match_id = ${matchId} FOR UPDATE`;
+    if (!match) return `There's no Match #${matchId}.`;
+    if (match.status === "CANCELLED") return `Match #${matchId} is already cancelled.`;
+    if (match.status === "LOCKED" || started(match)) return `Match #${matchId} has already started, so it can't be cancelled.`;
+
+    affected = await tx<Affected[]>`
+      SELECT r.discord_user_id, r.status,
+             coalesce((SELECT sum(CASE WHEN p.kind = 'PAYMENT' THEN p.amount_cents ELSE -p.amount_cents END)
+                       FROM payments p WHERE p.match_id = r.match_id AND p.discord_user_id = r.discord_user_id), 0)::int AS refund
+      FROM registrations r WHERE r.match_id = ${matchId} AND r.status <> 'CANCELLED'`;
+    for (const a of affected.filter((a) => a.refund > 0)) {
+      await tx`
+        INSERT INTO payments (match_id, discord_user_id, kind, amount_cents, provider, reference)
+        VALUES (${matchId}, ${a.discord_user_id}, 'REFUND', ${a.refund}, 'MOCK', ${`mock_${randomUUID()}`})`;
+    }
+    await tx`
+      UPDATE registrations SET status = 'CANCELLED', hold_expires_at = NULL, left_at = ${new Date()}
+      WHERE match_id = ${matchId} AND status <> 'CANCELLED'`;
+    await tx`
+      UPDATE matches SET status = 'CANCELLED', cancel_reason = ${reason}, cancelled_at = ${new Date()} WHERE match_id = ${matchId}`;
+    match = { ...match, status: "CANCELLED", cancel_reason: reason };
+    return null;
+  })) as string | null;
+  if (problem || !match) return problem ?? `There's no Match #${matchId}.`;
+  const game = match;
+
+  if (game.channel_id && game.message_id) {
+    await discord("PATCH", `/channels/${game.channel_id}/messages/${game.message_id}`, lobbyMessage(game, [])).catch((err) =>
+      console.error("Couldn't grey out the lobby", err),
+    );
+  }
+
+  const why = reason ? ` (${reason})` : "";
+  const header = `❌ **Game cancelled${why}:** ${title(game)}, ${torontoLabel(new Date(game.kickoff_time))}.`;
+  const unreachable: string[] = [];
+  let dmed = 0;
+  for (const a of affected) {
+    const detail =
+      a.refund > 0
+        ? `You've been refunded **${money(a.refund)}** in full.\n${testNote}`
+        : a.status === "WAITLIST"
+          ? "You were on the waitlist, so there's nothing to refund."
+          : "You weren't charged.";
+    try {
+      const dm = await discord<{ id: string }>("POST", "/users/@me/channels", { recipient_id: a.discord_user_id });
+      await discord("POST", `/channels/${dm.id}/messages`, { content: `${header}\n${detail}`, allowed_mentions: { parse: [] } });
+      dmed++;
+    } catch {
+      unreachable.push(a.discord_user_id);
+    }
+  }
+  if (unreachable.length && game.channel_id) {
+    await discord("POST", `/channels/${game.channel_id}/messages`, {
+      content: `${unreachable.map((id) => `<@${id}>`).join(" ")} ${header} Anyone who paid has been refunded in full.`,
+      allowed_mentions: { users: unreachable.slice(0, 100) },
+    }).catch((err) => console.error("Couldn't mention players about the cancellation", err));
+  }
+
+  const paid = affected.filter((a) => a.refund > 0);
+  const total = paid.reduce((s, a) => s + a.refund, 0);
+  return [
+    `❌ Match #${matchId} is cancelled${why}.`,
+    paid.length ? `Refunded ${paid.length} player${paid.length === 1 ? "" : "s"} ${money(total)} in total (test mode, no real money moved).` : "No one had paid yet.",
+    affected.length ? `Told ${affected.length} player${affected.length === 1 ? "" : "s"}: ${dmed} by DM${unreachable.length ? `, ${unreachable.length} mentioned in #games` : ""}.` : "",
+  ]
+    .filter(Boolean)
+    .join("\n");
 }

@@ -106,6 +106,16 @@ const commands = [
     options: [{ type: STRING, name: "day", description: "Game day", required: true, autocomplete: true }],
   },
   {
+    name: "cancel",
+    description: "Cancel a game: refunds everyone who paid and tells every player (organizers)",
+    default_member_permissions: ORGANIZER,
+    dm_permission: false,
+    options: [
+      { type: INTEGER, name: "match", description: "Match number", required: true, min_value: 1 },
+      { type: STRING, name: "reason", description: "Told to players, e.g. Field closed for snow", max_length: 80 },
+    ],
+  },
+  {
     name: "roster",
     description: "See who's paid, on hold, waitlisted or left, with money in and out (organizers)",
     default_member_permissions: ORGANIZER,

@@ -20,16 +20,20 @@ export function lobbyMessage(match: Match, registrations: Registration[]) {
     { name: "Price", value: price, inline: true },
   ];
   const names = (rows: Registration[]) => rows.map((r, i) => `${i + 1}. <@${r.discord_user_id}>`);
-  addList(fields, `Roster: ${confirmed.length}/${match.max_players} paid`, names(confirmed), "No one yet. Be the first!");
-  if (holding.length) fields.push({ name: "On hold", value: `⏳ ${holding.length} spot${holding.length === 1 ? "" : "s"} being paid for right now` });
-  if (waitlist.length) addList(fields, `Waitlist (${waitlist.length})`, names(waitlist));
-
-  const status = open ? (full ? "Full: join the waitlist and you'll get a DM if a spot opens" : "First come, first served") : "Roster closed";
+  const cancelled = match.status === "CANCELLED";
+  if (cancelled) {
+    fields.push({ name: "❌ Cancelled", value: `${match.cancel_reason ? `${match.cancel_reason}. ` : ""}Everyone who paid was refunded in full.` });
+  } else {
+    addList(fields, `Roster: ${confirmed.length}/${match.max_players} paid`, names(confirmed), "No one yet. Be the first!");
+    if (holding.length) fields.push({ name: "On hold", value: `⏳ ${holding.length} spot${holding.length === 1 ? "" : "s"} being paid for right now` });
+    if (waitlist.length) addList(fields, `Waitlist (${waitlist.length})`, names(waitlist));
+  }
+  const status = cancelled ? "Cancelled" : open ? (full ? "Full: join the waitlist and you'll get a DM if a spot opens" : "First come, first served") : "Roster closed";
   return {
     embeds: [
       {
-        title: `⚽ ${match.facility_name} · ${match.court_name}`,
-        color: open ? (full ? 0xe67e22 : 0x2ecc71) : 0x95a5a6,
+        title: `${cancelled ? "❌ CANCELLED · " : "⚽ "}${match.facility_name} · ${match.court_name}`,
+        color: cancelled ? 0xc0392b : open ? (full ? 0xe67e22 : 0x2ecc71) : 0x95a5a6,
         fields,
         footer: { text: `Match #${match.match_id} · ${status} · Leave up to ${LEAVE_CUTOFF_HOURS} hours before kickoff for a refund (minus card fee)` },
       },

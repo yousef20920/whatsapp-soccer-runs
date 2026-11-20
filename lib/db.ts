@@ -24,6 +24,7 @@ export interface Match {
   message_id: string | null;
   created_by: string;
   poll_id: number | null; // the poll this game came from
+  cancel_reason: string | null;
 }
 
 export interface Registration {

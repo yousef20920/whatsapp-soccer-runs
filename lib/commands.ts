@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import { sql, type Match } from "./db.js";
 import { deleteReply, discord, displayName, editReply, EPHEMERAL, env, isOrganizer, option, type Interaction } from "./discord.js";
 import { lobbyMessage } from "./lobby.js";
-import { rosterOf, rosterReport } from "./roster.js";
+import { cancelPreview, rosterOf, rosterReport } from "./roster.js";
 import { invitePollVoters, pollForDay } from "./polls.js";
 import { money, priceFor } from "./pricing.js";
 import { addDays, dateChoices, dayLabel, parseDate, parseTime, resolveDate, shortTime, torontoLabel, torontoToDate, torontoToday } from "./time.js";
@@ -241,6 +241,41 @@ export function dateAutocomplete(interaction: Interaction): { name: string; valu
 
 function chunk<T>(items: T[], size: number): T[][] {
   return Array.from({ length: Math.ceil(items.length / size) }, (_, i) => items.slice(i * size, i * size + size));
+}
+
+/** /cancel: asks the organizer to confirm, showing who gets refunded. Organizers only. */
+export async function cancelPrompt(interaction: Interaction): Promise<Reply & { components?: unknown[] }> {
+  if (!isOrganizer(interaction)) return privateReply("Only organizers can cancel games.");
+  const matchId = option<number>(interaction, "match")!;
+  const reason = (option<string>(interaction, "reason") ?? "").trim().replace(/\s+/g, " ").slice(0, 80);
+  const preview = await cancelPreview(matchId);
+  if (!preview) return privateReply(`There's no Match #${matchId}.`);
+  const { match, paidPlayers, refundCents, others } = preview;
+  if (match.status === "CANCELLED") return privateReply(`Match #${matchId} is already cancelled.`);
+  if (match.status === "LOCKED" || new Date(match.kickoff_time).getTime() <= Date.now()) {
+    return privateReply(`Match #${matchId} has already started, so it can't be cancelled.`);
+  }
+  const effects = [
+    paidPlayers ? `refund ${paidPlayers} paid player${paidPlayers === 1 ? "" : "s"} **${money(refundCents)}** in total (everything they paid)` : "no one has paid yet",
+    others ? `clear ${others} hold${others === 1 ? "" : "s"} and waitlist spot${others === 1 ? "" : "s"}` : "",
+    match.status === "OPEN" ? "mark the card in #games as cancelled and DM every player" : "",
+  ].filter(Boolean);
+  return {
+    content: [
+      `Cancel **Match #${matchId}**, ${match.facility_name} · ${match.court_name}, ${torontoLabel(new Date(match.kickoff_time))}${reason ? ` (${reason})` : ""}?`,
+      `This will ${effects.join(", ")}. It can't be undone.`,
+    ].join("\n"),
+    flags: EPHEMERAL,
+    components: [
+      {
+        type: 1,
+        components: [
+          { type: 2, style: 4, label: "Yes, cancel the game", custom_id: `cancel-yes:${matchId}:${reason}` },
+          { type: 2, style: 2, label: "Keep it", custom_id: `cancel-no:${matchId}` },
+        ],
+      },
+    ],
+  };
 }
 
 /** /roster: the full roster with payments, privately. Organizers only. */

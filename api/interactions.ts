@@ -1,9 +1,9 @@
 import { waitUntil } from "@vercel/functions";
-import { available, confirmMatch, dateAutocomplete, newGame, roster } from "../lib/commands.js";
-import { claim, leave, leaveConfirmed, pay, type Result } from "../lib/roster.js";
+import { available, cancelPrompt, confirmMatch, dateAutocomplete, newGame, roster } from "../lib/commands.js";
+import { cancelGame, claim, leave, leaveConfirmed, pay, type Result } from "../lib/roster.js";
 import { startPoll, vote } from "../lib/polls.js";
 import { parseReserveButton, parseReserveCommand, reserve } from "../lib/reserve.js";
-import { editReply, EPHEMERAL, InteractionType, isValidSignature, json, playerOf, ResponseType, type Interaction } from "../lib/discord.js";
+import { editReply, EPHEMERAL, InteractionType, isOrganizer, isValidSignature, json, playerOf, ResponseType, type Interaction } from "../lib/discord.js";
 
 // Discord sends every slash command and button click here (the app's Interactions Endpoint URL).
 export async function POST(request: Request): Promise<Response> {
@@ -38,6 +38,8 @@ export async function POST(request: Request): Promise<Response> {
         case "poll":
           waitUntil(startPoll(interaction).catch((err) => failLater(interaction, err)));
           return json({ type: ResponseType.DEFERRED_MESSAGE, data: { flags: EPHEMERAL } });
+        case "cancel":
+          return json({ type: ResponseType.MESSAGE, data: { ...(await cancelPrompt(interaction)), allowed_mentions: { parse: [] } } });
         case "roster":
           return message(await roster(interaction));
         case "reserve":
@@ -70,6 +72,17 @@ function gameButton(interaction: Interaction): Response {
   const [action, id] = (interaction.data?.custom_id ?? "").split(":");
   if (action === "poll-in" || action === "poll-out") {
     waitUntil(vote(interaction, Number(id), action === "poll-in" ? "IN" : "OUT").catch((err) => console.error("Vote failed", err)));
+    return json({ type: ResponseType.DEFERRED_UPDATE });
+  }
+  if (action === "cancel-yes" || action === "cancel-no") {
+    if (action === "cancel-no") return json({ type: ResponseType.UPDATE_MESSAGE, data: { content: "👍 Kept the game. Nothing changed.", components: [] } });
+    if (!isOrganizer(interaction)) return message({ content: "Only organizers can cancel games.", flags: EPHEMERAL });
+    const reason = (interaction.data?.custom_id ?? "").split(":").slice(2).join(":") || null;
+    waitUntil(
+      cancelGame(Number(id), reason)
+        .then((content) => editReply(interaction, { content, components: [], allowed_mentions: { parse: [] } }))
+        .catch((err) => failLater(interaction, err)),
+    );
     return json({ type: ResponseType.DEFERRED_UPDATE });
   }
   const matchId = Number(id);
