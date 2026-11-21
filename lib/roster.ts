@@ -4,13 +4,16 @@ import { sql, type Match, type Registration } from "./db.js";
 import { discord } from "./discord.js";
 import { lobbyMessage } from "./lobby.js";
 import { cardFeeCents, LEAVE_CUTOFF_HOURS, money } from "./pricing.js";
+import { createCheckout, expireCheckout, getCheckout, refund as stripeRefund, stripeEnabled, stripeTestMode, type CheckoutSession } from "./stripe.js";
 import { torontoLabel } from "./time.js";
 
 // Joining and leaving games (first come, first served):
 // - Claim & Pay holds a spot for HOLD_MINUTES while the player pays. If the game is full they join the waitlist.
 // - When a spot frees up, the next waitlisted player is DMed and gets it for OFFER_MINUTES.
 // - Paid players can leave until LEAVE_CUTOFF_HOURS before kickoff and are refunded minus the card fee.
-// Payments are test (MOCK) payments for now: no card is charged. Stripe replaces pay() later.
+// Payments: with STRIPE_SECRET_KEY set, each hold gets its own Stripe Checkout page and SORY checks Stripe
+// to confirm the payment (from the return page and the once-a-minute sweep). Without it, a test Pay button
+// records MOCK payments.
 
 export const HOLD_MINUTES = 5;
 export const OFFER_MINUTES = 10;
@@ -28,20 +31,34 @@ export interface Result {
 interface Effects {
   changed: boolean; // the lobby card needs redrawing
   offers: string[]; // waitlisted players to DM about a free spot
+  dms: { userId: string; content: string }[]; // receipts and late-payment refunds
 }
+type Reg = Registration & { id: number; stripe_session_id: string | null; checkout_url: string | null };
 
 const minutesFromNow = (m: number) => new Date(Date.now() + m * 60_000);
 const unix = (d: Date | string) => Math.floor(new Date(d).getTime() / 1000);
 const started = (m: Match) => new Date(m.kickoff_time).getTime() <= Date.now();
 const title = (m: Match) => `${m.facility_name} · ${m.court_name}`;
-const testNote = "-# Test mode: no card is charged and no real money moves. Real payments come with Stripe.";
+const when = (m: Match) => torontoLabel(new Date(m.kickoff_time));
+
+/** A line under payment messages saying whether real money moves. */
+function paymentNote(): string {
+  if (!stripeEnabled()) return "-# Test mode: no card is charged and no real money moves.";
+  if (stripeTestMode()) return "-# Stripe test mode: pay with card 4242 4242 4242 4242, any future date and any CVC. No real money moves.";
+  return "";
+}
+/** A line under receipts and refunds saying whether real money moved. */
+const doneNote = () =>
+  !stripeEnabled() ? "-# Test mode: no real money moved." : stripeTestMode() ? "-# Stripe test mode: no real money moved." : "";
+const modeNote = () => (!stripeEnabled() ? " (test mode, no real money moved)" : stripeTestMode() ? " (Stripe test mode)" : "");
+const lines = (...parts: string[]) => parts.filter(Boolean).join("\n");
 
 /**
  * Runs `action` with the game locked so two players can't take the same spot, after tidying it up
  * (expired holds, waitlist offers). Redraws the lobby and sends DMs once the change is saved.
  */
 async function withGame(matchId: number, action: (tx: Tx, match: Match, fx: Effects) => Promise<Result>): Promise<Result> {
-  const fx: Effects = { changed: false, offers: [] };
+  const fx: Effects = { changed: false, offers: [], dms: [] };
   let match: Match | undefined;
   const result = (await sql.begin(async (tx) => {
     [match] = await tx<Match[]>`SELECT * FROM matches WHERE match_id = ${matchId} FOR UPDATE`;
@@ -55,22 +72,113 @@ async function withGame(matchId: number, action: (tx: Tx, match: Match, fx: Effe
 
 /** Releases unpaid holds that ran out, then offers free spots to the waitlist. */
 async function tidy(tx: Tx, match: Match, fx: Effects) {
-  const lapsed = await tx`
-    UPDATE registrations SET status = 'CANCELLED', hold_expires_at = NULL, left_at = ${new Date()}
-    WHERE match_id = ${match.match_id} AND status = 'PENDING' AND hold_expires_at <= ${new Date()}
-    RETURNING id`;
-  if (lapsed.length) fx.changed = true;
+  const lapsed = await tx<Reg[]>`
+    SELECT * FROM registrations WHERE match_id = ${match.match_id} AND status = 'PENDING' AND hold_expires_at <= ${new Date()}`;
+  for (const reg of lapsed) {
+    if (await endCheckout(tx, match, reg, fx)) continue; // paid just in time: they're in
+    await releaseHold(tx, reg.id);
+    fx.changed = true;
+  }
   await offerFreeSpots(tx, match, fx);
+}
+
+const releaseHold = (tx: Tx, regId: number) => tx`
+  UPDATE registrations SET status = 'CANCELLED', hold_expires_at = NULL, checkout_url = NULL, left_at = ${new Date()} WHERE id = ${regId}`;
+
+/** Gives a held spot its own Stripe Checkout page (when Stripe is on). Returns the page's link. */
+async function attachCheckout(tx: Tx, match: Match, userId: string, holdUntil: Date): Promise<string | null> {
+  if (!stripeEnabled()) return null;
+  const session = await createCheckout({
+    matchId: match.match_id,
+    userId,
+    amountCents: match.checkout_price_cents,
+    description: `NASORY Runs · Match #${match.match_id} · ${title(match)} · ${when(match)}`,
+    holdKey: `hold-${match.match_id}-${userId}-${holdUntil.getTime()}`,
+  });
+  await tx`
+    UPDATE registrations SET stripe_session_id = ${session.id}, checkout_url = ${session.url}
+    WHERE match_id = ${match.match_id} AND discord_user_id = ${userId}`;
+  return session.url;
+}
+
+/** Closes a hold's Checkout page. If it turns out it was paid, records the payment and returns true. */
+async function endCheckout(tx: Tx, match: Match, reg: Reg, fx: Effects): Promise<boolean> {
+  if (!reg.stripe_session_id || !stripeEnabled()) return false;
+  const session = await expireCheckout(reg.stripe_session_id);
+  if (session.payment_status !== "paid") return false;
+  await recordStripePayment(tx, match, reg.discord_user_id, session, fx);
+  return true;
+}
+
+/** Checks open Checkout pages for payments that came in (e.g. the player closed the tab before returning). */
+async function checkOpenCheckouts(tx: Tx, match: Match, fx: Effects) {
+  if (!stripeEnabled()) return;
+  const open = await tx<Reg[]>`
+    SELECT * FROM registrations WHERE match_id = ${match.match_id} AND status = 'PENDING' AND stripe_session_id IS NOT NULL`;
+  for (const reg of open) {
+    const session = await getCheckout(reg.stripe_session_id!);
+    if (session.payment_status === "paid") await recordStripePayment(tx, match, reg.discord_user_id, session, fx);
+  }
+}
+
+/**
+ * Records a completed Stripe payment once. The player gets the spot if they still hold it or one is free;
+ * otherwise (the game filled up, was cancelled, or they'd already paid) the payment is refunded in full.
+ */
+async function recordStripePayment(tx: Tx, match: Match, userId: string, session: CheckoutSession, fx: Effects): Promise<"confirmed" | "refunded" | "already"> {
+  const intent = session.payment_intent!;
+  const amount = session.amount_total ?? match.checkout_price_cents;
+  const inserted = await tx`
+    INSERT INTO payments (match_id, discord_user_id, kind, amount_cents, provider, reference)
+    VALUES (${match.match_id}, ${userId}, 'PAYMENT', ${amount}, 'STRIPE', ${intent})
+    ON CONFLICT DO NOTHING RETURNING id`;
+  if (!inserted.length) return "already";
+
+  const reg = await registrationOf(tx, match.match_id, userId);
+  const canTake =
+    match.status === "OPEN" && !started(match) && reg?.status !== "CONFIRMED" &&
+    (reg?.status === "PENDING" || (await takenSpots(tx, match.match_id)) < match.max_players);
+  if (canTake) {
+    await tx`
+      UPDATE registrations SET status = 'CONFIRMED', hold_expires_at = NULL, checkout_url = NULL, paid_at = ${new Date()}, left_at = NULL
+      WHERE match_id = ${match.match_id} AND discord_user_id = ${userId}`;
+    fx.changed = true;
+    fx.dms.push({ userId, content: receipt(match, amount) });
+    return "confirmed";
+  }
+
+  const back = await stripeRefund(intent, amount, `late-${intent}`);
+  await tx`
+    INSERT INTO payments (match_id, discord_user_id, kind, amount_cents, provider, reference)
+    VALUES (${match.match_id}, ${userId}, 'REFUND', ${amount}, 'STRIPE', ${back.id})`;
+  const why =
+    reg?.status === "CONFIRMED"
+      ? "You'd already paid for this game, so this second payment"
+      : match.status === "CANCELLED"
+        ? "The game was cancelled, so your payment"
+        : "Your payment came in after your hold ran out and the game had filled up, so it";
+  fx.dms.push({ userId, content: `↩️ ${why} was refunded in full (${money(amount)}): ${title(match)}, ${when(match)}.` });
+  return "refunded";
+}
+
+function receipt(match: Match, amountCents: number): string {
+  return lines(
+    `✅ **You're in!** ${title(match)}, ${when(match)}.`,
+    `Paid ${money(amountCents)}. Need to drop out? Press **Leave Match** on the game up to ${LEAVE_CUTOFF_HOURS} hours before kickoff.`,
+    doneNote(),
+  );
 }
 
 async function offerFreeSpots(tx: Tx, match: Match, fx: Effects) {
   if (match.status !== "OPEN" || started(match)) return;
   const free = match.max_players - (await takenSpots(tx, match.match_id));
   if (free <= 0) return;
+  const until = minutesFromNow(OFFER_MINUTES);
   const offered = await tx<{ discord_user_id: string }[]>`
-    UPDATE registrations SET status = 'PENDING', offered_at = ${new Date()}, hold_expires_at = ${minutesFromNow(OFFER_MINUTES)}
+    UPDATE registrations SET status = 'PENDING', offered_at = ${new Date()}, hold_expires_at = ${until}
     WHERE id IN (SELECT id FROM registrations WHERE match_id = ${match.match_id} AND status = 'WAITLIST' ORDER BY created_at LIMIT ${free})
     RETURNING discord_user_id`;
+  for (const o of offered) await attachCheckout(tx, match, o.discord_user_id, until);
   if (offered.length) fx.changed = true;
   fx.offers.push(...offered.map((r) => r.discord_user_id));
 }
@@ -82,7 +190,7 @@ async function takenSpots(tx: Tx, matchId: number): Promise<number> {
 }
 
 async function registrationOf(tx: Tx, matchId: number, userId: string) {
-  const [reg] = await tx<(Registration & { id: number })[]>`
+  const [reg] = await tx<Reg[]>`
     SELECT * FROM registrations WHERE match_id = ${matchId} AND discord_user_id = ${userId}`;
   return reg;
 }
@@ -95,11 +203,22 @@ async function waitlistPosition(tx: Tx, matchId: number, userId: string): Promis
   return n;
 }
 
-async function paidSoFar(tx: Tx, matchId: number, userId: string): Promise<number> {
-  const [{ cents }] = await tx<{ cents: number }[]>`
-    SELECT coalesce(sum(CASE WHEN kind = 'PAYMENT' THEN amount_cents ELSE -amount_cents END), 0)::int AS cents
-    FROM payments WHERE match_id = ${matchId} AND discord_user_id = ${userId}`;
-  return cents;
+/** The payment for the player's current spot (earlier spots they left were already refunded). */
+async function latestPayment(tx: Tx, matchId: number, userId: string) {
+  const [payment] = await tx<{ id: number; amount_cents: number; provider: "MOCK" | "STRIPE"; reference: string }[]>`
+    SELECT id, amount_cents, provider, reference FROM payments
+    WHERE match_id = ${matchId} AND discord_user_id = ${userId} AND kind = 'PAYMENT' ORDER BY id DESC LIMIT 1`;
+  return payment;
+}
+
+/** Sends money back the way it came in and records it. */
+async function refundPayment(tx: Tx, matchId: number, userId: string, payment: { id: number; provider: string; reference: string }, cents: number, why: string) {
+  if (cents <= 0) return;
+  const reference =
+    payment.provider === "STRIPE" ? (await stripeRefund(payment.reference, cents, `${why}-${payment.id}`)).id : `mock_${randomUUID()}`;
+  await tx`
+    INSERT INTO payments (match_id, discord_user_id, kind, amount_cents, provider, reference)
+    VALUES (${matchId}, ${userId}, 'REFUND', ${cents}, ${payment.provider}, ${reference})`;
 }
 
 function cancelledText(match: Match): string {
@@ -112,23 +231,20 @@ function closedText(match: Match): string {
   return "This game has started, so the roster is closed.";
 }
 
-function payPrompt(match: Match, holdUntil: Date | string, offered: boolean): Result {
+function payPrompt(match: Match, holdUntil: Date | string, offered: boolean, checkoutUrl: string | null): Result {
+  const price = money(match.checkout_price_cents);
+  const payButton = checkoutUrl
+    ? { type: 2, style: 5, label: `Pay ${price}`, url: checkoutUrl }
+    : { type: 2, style: 3, label: `Pay ${price} (test)`, custom_id: `pay:${match.match_id}` };
   return {
-    content: [
-      offered
-        ? `🎉 **A spot opened up for you** in ${title(match)}, ${torontoLabel(new Date(match.kickoff_time))}.`
-        : `⏳ **Spot held for you** in ${title(match)}, ${torontoLabel(new Date(match.kickoff_time))}.`,
-      `Pay by <t:${unix(holdUntil)}:t> (<t:${unix(holdUntil)}:R>) to lock it in, or it goes to the next person.`,
-      testNote,
-    ].join("\n"),
+    content: lines(
+      offered ? `🎉 **A spot opened up for you** in ${title(match)}, ${when(match)}.` : `⏳ **Spot held for you** in ${title(match)}, ${when(match)}.`,
+      `Pay by <t:${unix(holdUntil)}:t> (<t:${unix(holdUntil)}:R>) to lock it in, or it goes to the next person.` +
+        (checkoutUrl ? " Pay opens Stripe's secure checkout; you'll get a DM once it goes through." : ""),
+      paymentNote(),
+    ),
     components: [
-      {
-        type: 1,
-        components: [
-          { type: 2, style: 3, label: `Pay ${money(match.checkout_price_cents)} (test)`, custom_id: `pay:${match.match_id}` },
-          { type: 2, style: 2, label: offered ? "No thanks" : "Cancel", custom_id: `drop:${match.match_id}` },
-        ],
-      },
+      { type: 1, components: [payButton, { type: 2, style: 2, label: offered ? "No thanks" : "Cancel", custom_id: `drop:${match.match_id}` }] },
     ],
   };
 }
@@ -139,7 +255,7 @@ export function claim(matchId: number, player: Player): Promise<Result> {
     if (match.status !== "OPEN" || started(match)) return { content: closedText(match) };
     const reg = await registrationOf(tx, matchId, player.id);
     if (reg?.status === "CONFIRMED") return { content: "✅ You're already in this game." };
-    if (reg?.status === "PENDING") return payPrompt(match, reg.hold_expires_at!, !!reg.offered_at);
+    if (reg?.status === "PENDING") return payPrompt(match, reg.hold_expires_at!, !!reg.offered_at, reg.checkout_url);
     if (reg?.status === "WAITLIST") {
       return { content: `📋 You're #${await waitlistPosition(tx, matchId, player.id)} on the waitlist. I'll DM you if a spot opens.` };
     }
@@ -151,16 +267,17 @@ export function claim(matchId: number, player: Player): Promise<Result> {
       VALUES (${matchId}, ${player.id}, ${player.name}, ${full ? "WAITLIST" : "PENDING"}, ${holdUntil}, ${new Date()})
       ON CONFLICT (match_id, discord_user_id) DO UPDATE SET
         discord_username = EXCLUDED.discord_username, status = EXCLUDED.status, hold_expires_at = EXCLUDED.hold_expires_at,
-        created_at = EXCLUDED.created_at, offered_at = NULL, paid_at = NULL, left_at = NULL`;
+        created_at = EXCLUDED.created_at, offered_at = NULL, paid_at = NULL, left_at = NULL,
+        stripe_session_id = NULL, checkout_url = NULL`;
     fx.changed = true;
-    if (!full) return payPrompt(match, holdUntil!, false);
+    if (!full) return payPrompt(match, holdUntil!, false, await attachCheckout(tx, match, player.id, holdUntil!));
     return {
       content: `📋 The game is full. You're **#${await waitlistPosition(tx, matchId, player.id)} on the waitlist**. If a spot opens I'll DM you and hold it for ${OFFER_MINUTES} minutes.`,
     };
   });
 }
 
-/** Pay on a held spot. A test payment for now; Stripe Checkout replaces this. */
+/** The test Pay button (only shown when Stripe isn't set up): records a MOCK payment. */
 export function pay(matchId: number, player: Player): Promise<Result> {
   return withGame(matchId, async (tx, match, fx) => {
     if (match.status === "CANCELLED") return { content: cancelledText(match), components: [] };
@@ -172,6 +289,7 @@ export function pay(matchId: number, player: Player): Promise<Result> {
         components: [],
       };
     }
+    if (stripeEnabled()) return payPrompt(match, reg.hold_expires_at!, !!reg.offered_at, reg.checkout_url); // real payments are on
 
     const amount = match.checkout_price_cents;
     await tx`
@@ -181,14 +299,7 @@ export function pay(matchId: number, player: Player): Promise<Result> {
       UPDATE registrations SET status = 'CONFIRMED', hold_expires_at = NULL, paid_at = ${new Date()}
       WHERE match_id = ${matchId} AND discord_user_id = ${player.id}`;
     fx.changed = true;
-    return {
-      content: [
-        `✅ **You're in!** ${title(match)}, ${torontoLabel(new Date(match.kickoff_time))}.`,
-        `Paid ${money(amount)}. Need to drop out? Press **Leave Match** on the game up to ${LEAVE_CUTOFF_HOURS} hours before kickoff.`,
-        testNote,
-      ].join("\n"),
-      components: [],
-    };
+    return { content: receipt(match, amount), components: [] };
   });
 }
 
@@ -199,10 +310,11 @@ export function leave(matchId: number, player: Player): Promise<Result> {
     const reg = await registrationOf(tx, matchId, player.id);
     if (!reg || reg.status === "CANCELLED") return { content: "You're not on this game's roster.", components: [] };
 
+    if (reg.status === "PENDING" && (await endCheckout(tx, match, reg, fx))) {
+      return { content: "✅ Your payment already went through, so you're in. To drop out, press **Leave Match** on the game.", components: [] };
+    }
     if (reg.status === "WAITLIST" || reg.status === "PENDING") {
-      await tx`
-        UPDATE registrations SET status = 'CANCELLED', hold_expires_at = NULL, left_at = ${new Date()}
-        WHERE match_id = ${matchId} AND discord_user_id = ${player.id}`;
+      await releaseHold(tx, reg.id);
       fx.changed = true;
       await offerFreeSpots(tx, match, fx);
       return {
@@ -213,7 +325,7 @@ export function leave(matchId: number, player: Player): Promise<Result> {
 
     const late = cutoffPassed(match);
     if (late) return { content: late, components: [] };
-    const paid = await paidSoFar(tx, matchId, player.id);
+    const paid = (await latestPayment(tx, matchId, player.id))?.amount_cents ?? 0;
     const refund = Math.max(0, paid - cardFeeCents(paid));
     return {
       content: `Leave ${title(match)}, ${torontoLabel(new Date(match.kickoff_time))}? You'll get **${money(refund)}** back (your ${money(paid)} minus the ${money(paid - refund)} card fee).`,
@@ -239,21 +351,20 @@ export function leaveConfirmed(matchId: number, player: Player): Promise<Result>
     const late = cutoffPassed(match);
     if (late) return { content: late, components: [] };
 
-    const paid = await paidSoFar(tx, matchId, player.id);
+    const payment = await latestPayment(tx, matchId, player.id);
+    const paid = payment?.amount_cents ?? 0;
     const refund = Math.max(0, paid - cardFeeCents(paid));
-    if (refund > 0) {
-      await tx`
-        INSERT INTO payments (match_id, discord_user_id, kind, amount_cents, provider, reference)
-        VALUES (${matchId}, ${player.id}, 'REFUND', ${refund}, 'MOCK', ${`mock_${randomUUID()}`})`;
-    }
+    if (payment) await refundPayment(tx, matchId, player.id, payment, refund, "leave");
     await tx`
       UPDATE registrations SET status = 'CANCELLED', paid_at = NULL, left_at = ${new Date()}
       WHERE match_id = ${matchId} AND discord_user_id = ${player.id}`;
     fx.changed = true;
     await offerFreeSpots(tx, match, fx);
     return {
-      content: [`👋 You've left Match #${matchId}. Refund: **${money(refund)}** (your ${money(paid)} minus the ${money(paid - refund)} card fee).`, testNote].join(
-        "\n",
+      content: lines(
+        `👋 You've left Match #${matchId}. Refund: **${money(refund)}** (your ${money(paid)} minus the ${money(paid - refund)} card fee).`,
+        stripeEnabled() ? "-# Card refunds usually show up in 5 to 10 business days." : "",
+        doneNote(),
       ),
       components: [],
     };
@@ -276,17 +387,18 @@ export async function sweep(): Promise<number> {
     SELECT m.match_id FROM matches m
     WHERE m.status = 'OPEN' AND (
       m.kickoff_time <= ${new Date()}
-      OR EXISTS (SELECT 1 FROM registrations r WHERE r.match_id = m.match_id AND r.status = 'PENDING' AND r.hold_expires_at <= ${new Date()})
+      OR EXISTS (SELECT 1 FROM registrations r WHERE r.match_id = m.match_id AND r.status = 'PENDING'
+                 AND (r.hold_expires_at <= ${new Date()} OR r.stripe_session_id IS NOT NULL))
       OR (EXISTS (SELECT 1 FROM registrations r WHERE r.match_id = m.match_id AND r.status = 'WAITLIST')
           AND (SELECT count(*) FROM registrations r WHERE r.match_id = m.match_id AND r.status IN ('CONFIRMED', 'PENDING')) < m.max_players)
     )`;
   for (const { match_id } of due) {
     await withGame(match_id, async (tx, match, fx) => {
+      await checkOpenCheckouts(tx, match, fx);
       if (match.status === "OPEN" && started(match)) {
+        const holds = await tx<Reg[]>`SELECT * FROM registrations WHERE match_id = ${match_id} AND status = 'PENDING'`;
+        for (const reg of holds) if (!(await endCheckout(tx, match, reg, fx))) await releaseHold(tx, reg.id);
         await tx`UPDATE matches SET status = 'LOCKED' WHERE match_id = ${match_id}`;
-        await tx`
-          UPDATE registrations SET status = 'CANCELLED', hold_expires_at = NULL, left_at = ${new Date()}
-          WHERE match_id = ${match_id} AND status = 'PENDING'`;
         fx.changed = true;
       }
       return { content: "" };
@@ -305,6 +417,7 @@ export function rosterOf(matchId: number) {
 
 /** After a change is saved: redraw the lobby card and DM waitlisted players about their spot. */
 async function announce(before: Match, fx: Effects) {
+  for (const dm of fx.dms) await sendDm(dm.userId, dm.content);
   if (!fx.changed && !fx.offers.length) return;
   const [match] = await sql<Match[]>`SELECT * FROM matches WHERE match_id = ${before.match_id}`;
   if (fx.changed && match.channel_id && match.message_id) {
@@ -315,12 +428,48 @@ async function announce(before: Match, fx: Effects) {
   for (const userId of fx.offers) await offerSpot(match, userId);
 }
 
+async function sendDm(userId: string, content: string) {
+  try {
+    const dm = await discord<{ id: string }>("POST", "/users/@me/channels", { recipient_id: userId });
+    await discord("POST", `/channels/${dm.id}/messages`, { content, allowed_mentions: { parse: [] } });
+  } catch (err) {
+    console.error(`Couldn't DM ${userId}`, err);
+  }
+}
+
+/**
+ * Stripe's return page (api/paid): checks the Checkout session with Stripe and records the payment.
+ * "paid" means the player has the spot; "refunded" means it came too late and was sent back.
+ */
+export async function settleCheckout(sessionId: string): Promise<{ state: "paid" | "refunded" | "unpaid" | "unknown"; match?: Match }> {
+  const session = await getCheckout(sessionId).catch(() => null);
+  const matchId = Number(session?.metadata.match_id);
+  const userId = session?.metadata.discord_user_id;
+  if (!session || !matchId || !userId) return { state: "unknown" };
+  let game: Match | undefined;
+  let state: "paid" | "refunded" | "unpaid" = "unpaid";
+  await withGame(matchId, async (tx, match, fx) => {
+    game = match;
+    if (session.payment_status === "paid") {
+      await recordStripePayment(tx, match, userId, session, fx);
+      // They have the spot if they're confirmed and this payment wasn't sent back.
+      const reg = await registrationOf(tx, matchId, userId);
+      const [sentBack] = await tx`
+        SELECT 1 FROM payments WHERE match_id = ${matchId} AND discord_user_id = ${userId} AND kind = 'REFUND' AND provider = 'STRIPE'
+          AND id > (SELECT id FROM payments WHERE kind = 'PAYMENT' AND provider = 'STRIPE' AND reference = ${session.payment_intent})`;
+      state = reg?.status === "CONFIRMED" && !sentBack ? "paid" : "refunded";
+    }
+    return { content: "" };
+  });
+  return { state, match: game };
+}
+
 async function offerSpot(match: Match, userId: string) {
   const [reg] = await sql<Registration[]>`
     SELECT * FROM registrations WHERE match_id = ${match.match_id} AND discord_user_id = ${userId}`;
   try {
     const dm = await discord<{ id: string }>("POST", "/users/@me/channels", { recipient_id: userId });
-    await discord("POST", `/channels/${dm.id}/messages`, payPrompt(match, reg.hold_expires_at!, true));
+    await discord("POST", `/channels/${dm.id}/messages`, payPrompt(match, reg.hold_expires_at!, true, (reg as Reg).checkout_url));
   } catch {
     // DMs turned off: ping them under the game instead. Claim & Pay shows them the Pay button.
     await discord("POST", `/channels/${match.channel_id}/messages`, {
@@ -369,7 +518,7 @@ export async function rosterReport(matchId: number): Promise<string> {
     list(gone, (r) => `<@${r.discord_user_id}> · refunded ${money(byUser.get(r.discord_user_id)?.refunded ?? 0)}`),
     ``,
     `💵 Collected **${money(totalIn - totalOut)}** (${money(totalIn)} in, ${money(totalOut)} refunded) · field costs ${money(match.field_cost_cents)}`,
-    testNote,
+    !stripeEnabled() ? "-# Test mode: no real money moved." : stripeTestMode() ? "-# Stripe test mode: no real money moved." : "",
   ].join("\n");
 }
 
@@ -380,9 +529,10 @@ export async function cancelPreview(matchId: number): Promise<{ match: Match; pa
   const [row] = await sql<{ paid_players: number; refund: number; others: number }[]>`
     SELECT
       (SELECT count(*)::int FROM registrations WHERE match_id = ${matchId} AND status = 'CONFIRMED') AS paid_players,
-      (SELECT coalesce(sum(CASE WHEN p.kind = 'PAYMENT' THEN p.amount_cents ELSE -p.amount_cents END), 0)::int
-         FROM payments p JOIN registrations r ON r.match_id = p.match_id AND r.discord_user_id = p.discord_user_id
-         WHERE p.match_id = ${matchId} AND r.status <> 'CANCELLED') AS refund, -- players who already left keep their earlier refund
+      (SELECT coalesce(sum(lp.amount_cents), 0)::int FROM registrations r
+         JOIN LATERAL (SELECT amount_cents FROM payments p WHERE p.match_id = r.match_id AND p.discord_user_id = r.discord_user_id
+                       AND p.kind = 'PAYMENT' ORDER BY p.id DESC LIMIT 1) lp ON true
+         WHERE r.match_id = ${matchId} AND r.status = 'CONFIRMED') AS refund, -- each paid player's current spot
       (SELECT count(*)::int FROM registrations WHERE match_id = ${matchId} AND status IN ('PENDING', 'WAITLIST')) AS others`;
   return { match, paidPlayers: row.paid_players, refundCents: row.refund, others: row.others };
 }
@@ -401,15 +551,18 @@ export async function cancelGame(matchId: number, reason: string | null): Promis
     if (match.status === "CANCELLED") return `Match #${matchId} is already cancelled.`;
     if (match.status === "LOCKED" || started(match)) return `Match #${matchId} has already started, so it can't be cancelled.`;
 
+    // Close open Checkout pages first; anyone who paid in the meantime is refunded below with everyone else.
+    const fx: Effects = { changed: false, offers: [], dms: [] };
+    const holds = await tx<Reg[]>`SELECT * FROM registrations WHERE match_id = ${matchId} AND status = 'PENDING'`;
+    for (const reg of holds) await endCheckout(tx, match, reg, fx);
+
     affected = await tx<Affected[]>`
-      SELECT r.discord_user_id, r.status,
-             coalesce((SELECT sum(CASE WHEN p.kind = 'PAYMENT' THEN p.amount_cents ELSE -p.amount_cents END)
-                       FROM payments p WHERE p.match_id = r.match_id AND p.discord_user_id = r.discord_user_id), 0)::int AS refund
-      FROM registrations r WHERE r.match_id = ${matchId} AND r.status <> 'CANCELLED'`;
-    for (const a of affected.filter((a) => a.refund > 0)) {
-      await tx`
-        INSERT INTO payments (match_id, discord_user_id, kind, amount_cents, provider, reference)
-        VALUES (${matchId}, ${a.discord_user_id}, 'REFUND', ${a.refund}, 'MOCK', ${`mock_${randomUUID()}`})`;
+      SELECT discord_user_id, status, 0 AS refund FROM registrations WHERE match_id = ${matchId} AND status <> 'CANCELLED'`;
+    for (const a of affected.filter((a) => a.status === "CONFIRMED")) {
+      const payment = await latestPayment(tx, matchId, a.discord_user_id);
+      if (!payment) continue;
+      a.refund = payment.amount_cents; // everything they paid, card fee included
+      await refundPayment(tx, matchId, a.discord_user_id, payment, a.refund, "cancel");
     }
     await tx`
       UPDATE registrations SET status = 'CANCELLED', hold_expires_at = NULL, left_at = ${new Date()}
@@ -435,7 +588,7 @@ export async function cancelGame(matchId: number, reason: string | null): Promis
   for (const a of affected) {
     const detail =
       a.refund > 0
-        ? `You've been refunded **${money(a.refund)}** in full.\n${testNote}`
+        ? lines(`You've been refunded **${money(a.refund)}** in full.`, stripeEnabled() ? "-# Card refunds usually show up in 5 to 10 business days." : "", doneNote())
         : a.status === "WAITLIST"
           ? "You were on the waitlist, so there's nothing to refund."
           : "You weren't charged.";
@@ -458,7 +611,7 @@ export async function cancelGame(matchId: number, reason: string | null): Promis
   const total = paid.reduce((s, a) => s + a.refund, 0);
   return [
     `❌ Match #${matchId} is cancelled${why}.`,
-    paid.length ? `Refunded ${paid.length} player${paid.length === 1 ? "" : "s"} ${money(total)} in total (test mode, no real money moved).` : "No one had paid yet.",
+    paid.length ? `Refunded ${paid.length} player${paid.length === 1 ? "" : "s"} ${money(total)} in total${modeNote()}.` : "No one had paid yet.",
     affected.length ? `Told ${affected.length} player${affected.length === 1 ? "" : "s"}: ${dmed} by DM${unreachable.length ? `, ${unreachable.length} mentioned in #games` : ""}.` : "",
   ]
     .filter(Boolean)
