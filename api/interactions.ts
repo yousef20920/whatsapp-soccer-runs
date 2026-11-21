@@ -3,7 +3,7 @@ import { available, cancelPrompt, confirmMatch, dateAutocomplete, newGame, roste
 import { cancelGame, claim, leave, leaveConfirmed, pay, type Result } from "../lib/roster.js";
 import { startPoll, vote } from "../lib/polls.js";
 import { parseReserveButton, parseReserveCommand, reserve } from "../lib/reserve.js";
-import { botLog, editReply, EPHEMERAL, followUpPrivately, InteractionType, isOrganizer, isValidSignature, json, playerOf, ResponseType, sendDirectMessage, type Interaction } from "../lib/discord.js";
+import { botLog, discord, editReply, EPHEMERAL, followUpPrivately, InteractionType, isOrganizer, isValidSignature, json, playerOf, ResponseType, sendDirectMessage, type Interaction } from "../lib/discord.js";
 
 // Discord sends every slash command and button click here (the app's Interactions Endpoint URL).
 export async function POST(request: Request): Promise<Response> {
@@ -70,6 +70,7 @@ export async function POST(request: Request): Promise<Response> {
  */
 function gameButton(interaction: Interaction): Response {
   const [action, id] = (interaction.data?.custom_id ?? "").split(":");
+  if (action === "agree-rules") return agreeToRules(interaction);
   if (action === "poll-in" || action === "poll-out") {
     waitUntil(vote(interaction, Number(id), action === "poll-in" ? "IN" : "OUT").catch((err) => console.error("Vote failed", err)));
     return json({ type: ResponseType.DEFERRED_UPDATE });
@@ -130,6 +131,27 @@ function gameButton(interaction: Interaction): Response {
       return json({ type: ResponseType.UPDATE_MESSAGE, data: { content: "👍 You're still in.", components: [] } });
   }
   return message({ content: "That button isn't recognized.", flags: EPHEMERAL });
+}
+
+/** "I agree" under #rules: gives the Player role, which unlocks #games, #plan-a-run and the rest. */
+function agreeToRules(interaction: Interaction): Response {
+  const player = playerOf(interaction);
+  const roleId = process.env.PLAYER_ROLE_ID;
+  if (!roleId || !interaction.guild_id) return message({ content: "Agreeing isn't set up yet. Ask an organizer.", flags: EPHEMERAL });
+  if (interaction.member?.roles?.includes(roleId)) {
+    return message({ content: "✅ You've already agreed. Head to <#" + (process.env.COMMANDS_CHANNEL_ID ?? "") + "> to plan a run.", flags: EPHEMERAL });
+  }
+  waitUntil(
+    discord("PUT", `/guilds/${interaction.guild_id}/members/${player.id}/roles/${roleId}`)
+      .then(() =>
+        editReply(interaction, {
+          content: `✅ Welcome, ${player.name}! You can now see <#${process.env.GAMES_CHANNEL_ID}> and <#${process.env.COMMANDS_CHANNEL_ID}>. Allow DMs from this server so SORY can send your payment links.`,
+        }),
+      )
+      .then(() => botLog(`🙋 <@${player.id}> agreed to the rules and got the Player role`))
+      .catch((err) => failLater(interaction, err)),
+  );
+  return json({ type: ResponseType.DEFERRED_MESSAGE, data: { flags: EPHEMERAL } });
 }
 
 function message(data: { content: string; flags?: number }) {

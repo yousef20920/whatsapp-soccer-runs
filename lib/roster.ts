@@ -16,7 +16,7 @@ import { torontoLabel } from "./time.js";
 // records MOCK payments.
 
 export const HOLD_MINUTES = 5;
-export const OFFER_MINUTES = 10;
+export const OFFER_MINUTES = 30; // fits inside a Stripe Checkout page's 31-minute life
 
 type Tx = postgres.TransactionSql;
 export interface Player {

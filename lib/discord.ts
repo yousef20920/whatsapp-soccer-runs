@@ -15,7 +15,7 @@ export interface Interaction {
   application_id: string;
   guild_id?: string;
   channel_id?: string;
-  member?: { user: DiscordUser; permissions: string; nick?: string | null };
+  member?: { user: DiscordUser; permissions: string; nick?: string | null; roles?: string[] };
   user?: DiscordUser; // set instead of member in DMs
   data?: {
     name?: string;
