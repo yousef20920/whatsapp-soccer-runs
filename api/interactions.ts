@@ -3,7 +3,7 @@ import { available, cancelPrompt, confirmMatch, dateAutocomplete, newGame, roste
 import { cancelGame, claim, leave, leaveConfirmed, pay, type Result } from "../lib/roster.js";
 import { startPoll, vote } from "../lib/polls.js";
 import { parseReserveButton, parseReserveCommand, reserve } from "../lib/reserve.js";
-import { botLog, editReply, EPHEMERAL, InteractionType, isOrganizer, isValidSignature, json, playerOf, ResponseType, type Interaction } from "../lib/discord.js";
+import { botLog, editReply, EPHEMERAL, followUpPrivately, InteractionType, isOrganizer, isValidSignature, json, playerOf, ResponseType, sendDirectMessage, type Interaction } from "../lib/discord.js";
 
 // Discord sends every slash command and button click here (the app's Interactions Endpoint URL).
 export async function POST(request: Request): Promise<Response> {
@@ -95,11 +95,31 @@ function gameButton(interaction: Interaction): Response {
     );
     return json(update ? { type: ResponseType.DEFERRED_UPDATE } : { type: ResponseType.DEFERRED_MESSAGE, data: { flags: EPHEMERAL } });
   };
+  // Buttons on the public game card answer by DM, so #games only ever shows the game itself.
+  // Acknowledging with a silent update leaves the card as it is (SORY redraws it separately).
+  const runInDm = (work: () => Promise<Result>) => {
+    waitUntil(
+      work()
+        .then(async (r) => {
+          if (!(await sendDirectMessage(player.id, { content: r.content, components: r.components }))) {
+            const note = "\n-# I couldn't DM you. To get SORY's messages privately, allow DMs from server members (server name ▸ Privacy Settings).";
+            await followUpPrivately(interaction, r.content + note, r.components);
+          }
+        })
+        .catch(async (err) => {
+          console.error(err);
+          await botLog(`⚠️ button ${action} failed for <@${player.id}>: ${String((err as Error)?.message ?? err).slice(0, 300)}`);
+          await followUpPrivately(interaction, "⚠️ Something went wrong. Please try again in a minute.").catch(console.error);
+        }),
+    );
+    return json({ type: ResponseType.DEFERRED_UPDATE });
+  };
+  const onGameCard = !!interaction.guild_id; // the same buttons also appear in DMs (e.g. poll invites, receipts)
   switch (action) {
     case "claim":
-      return run(() => claim(matchId, player), false);
+      return onGameCard ? runInDm(() => claim(matchId, player)) : run(() => claim(matchId, player), false);
     case "leave":
-      return run(() => leave(matchId, player), false);
+      return onGameCard ? runInDm(() => leave(matchId, player)) : run(() => leave(matchId, player), false);
     case "pay":
       return run(() => pay(matchId, player), true);
     case "drop":

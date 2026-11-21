@@ -90,8 +90,24 @@ export function editReply(interaction: Interaction, body: unknown) {
 }
 
 /** A private extra message after the first reply (e.g. after a button quietly updated a public card). */
-export function followUpPrivately(interaction: Interaction, content: string) {
-  return discord("POST", `/webhooks/${interaction.application_id}/${interaction.token}`, { content, flags: EPHEMERAL, allowed_mentions: { parse: [] } }, false);
+export function followUpPrivately(interaction: Interaction, content: string, components?: unknown[]) {
+  return discord(
+    "POST",
+    `/webhooks/${interaction.application_id}/${interaction.token}`,
+    { content, components, flags: EPHEMERAL, allowed_mentions: { parse: [] } },
+    false,
+  );
+}
+
+/** DMs a user. Returns false if they can't be DMed (DMs from server members turned off). */
+export async function sendDirectMessage(userId: string, body: { content: string; components?: unknown[] }): Promise<boolean> {
+  try {
+    const dm = await discord<{ id: string }>("POST", "/users/@me/channels", { recipient_id: userId });
+    await discord("POST", `/channels/${dm.id}/messages`, { ...body, allowed_mentions: { parse: [] } });
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 /** Removes the private "SORY is thinking…" reply once the real answer is posted elsewhere. */

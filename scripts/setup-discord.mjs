@@ -56,8 +56,8 @@ const LAYOUT = [
   {
     category: "GAMES",
     channels: [
-      { name: "games", access: "buttons", topic: "The current game. Tap Claim & Pay or Leave Match. Use #sory-commands for everything else." },
-      { name: "sory-commands", access: "commands", topic: "Use SORY here: /available, /poll and more. Commands only, no chat." },
+      { name: "games", access: "buttons", topic: "The current game. Tap Claim & Pay or Leave Match. Plan runs in #plan-a-run." },
+      { name: "plan-a-run", access: "commands", topic: "Plan the next run: /available for open fields, /poll to ask who's in, and vote on polls here. Commands only, no chat." },
       { name: "find-a-sub", access: "open", topic: "Can't make it after the cutoff? Find someone to take your spot." },
     ],
   },
