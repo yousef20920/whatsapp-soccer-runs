@@ -99,6 +99,18 @@ export function deleteReply(interaction: Interaction) {
   return discord("DELETE", `/webhooks/${interaction.application_id}/${interaction.token}/messages/@original`, undefined, false);
 }
 
+/** Where SORY's commands run and polls go. #games only holds the current game card. */
+export const commandsChannelId = () => process.env.COMMANDS_CHANNEL_ID || env("GAMES_CHANNEL_ID");
+
+/** Posts one line to #bot-logs. Never throws: logging must not break what it records. */
+export async function botLog(text: string): Promise<void> {
+  const channelId = process.env.BOT_LOGS_CHANNEL_ID;
+  if (!channelId) return;
+  await discord("POST", `/channels/${channelId}/messages`, { content: text.slice(0, 2000), allowed_mentions: { parse: [] } }).catch((err) =>
+    console.error("Couldn't write to #bot-logs", err),
+  );
+}
+
 export function env(name: string): string {
   const value = process.env[name];
   if (!value) throw new Error(`Missing environment variable ${name}`);

@@ -16,8 +16,11 @@ export function priceFor(fieldCostCents: number, maxPlayers: number) {
 /** Players can leave (and get refunded) up to this many hours before kickoff. */
 export const LEAVE_CUTOFF_HOURS = 2;
 
-/** Stripe's fee on a card payment, kept back when a player leaves and is refunded. */
-export function cardFeeCents(paidCents: number): number {
+/**
+ * Cancellation fee kept when a player leaves a game they paid for. It matches what Stripe keeps on a
+ * refunded payment (2.9% + 30¢), so a player leaving never costs the club money.
+ */
+export function cancellationFeeCents(paidCents: number): number {
   return paidCents > 0 ? Math.round(paidCents * STRIPE_PERCENT) + STRIPE_FIXED_CENTS : 0;
 }
 

@@ -35,7 +35,7 @@ export function lobbyMessage(match: Match, registrations: Registration[]) {
         title: `${cancelled ? "❌ CANCELLED · " : "⚽ "}${match.facility_name} · ${match.court_name}`,
         color: cancelled ? 0xc0392b : open ? (full ? 0xe67e22 : 0x2ecc71) : 0x95a5a6,
         fields,
-        footer: { text: `Match #${match.match_id} · ${status} · Leave up to ${LEAVE_CUTOFF_HOURS} hours before kickoff for a refund (minus card fee)` },
+        footer: { text: `Match #${match.match_id} · ${status} · Leave up to ${LEAVE_CUTOFF_HOURS} hours before kickoff for a refund (minus a small cancellation fee)` },
       },
     ],
     components: [

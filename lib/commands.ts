@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import { sql, type Match } from "./db.js";
-import { deleteReply, discord, displayName, editReply, EPHEMERAL, env, isOrganizer, option, type Interaction } from "./discord.js";
+import { botLog, deleteReply, discord, displayName, editReply, EPHEMERAL, env, isOrganizer, option, type Interaction } from "./discord.js";
 import { lobbyMessage } from "./lobby.js";
 import { cancelPreview, rosterOf, rosterReport } from "./roster.js";
 import { invitePollVoters, pollForDay } from "./polls.js";
@@ -84,7 +84,37 @@ export async function confirmMatch(interaction: Interaction): Promise<void> {
       ? `\n🗳️ Told ${total === 1 ? "the 1 poll voter" : `the ${total} poll voters`} who said I'm in (${dmed} by DM${dmed < total ? `, ${total - dmed} mentioned in the channel` : ""}).`
       : `\n🗳️ Closed the poll for that day (no one had said I'm in).`;
   }
+  // #games only shows the newest game: remove SORY's older posts there.
+  const stillOpen = await clearGamesChannel(channelId, message.id, interaction.application_id);
+  if (stillOpen.length) {
+    note += `\n-# Older open game${stillOpen.length === 1 ? "" : "s"} ${stillOpen.map((n) => `#${n}`).join(", ")} left #games. Their paid players can still leave from their receipt DM.`;
+  }
   await reply(`✅ Match #${matchId} is open and posted in <#${channelId}>.${note}`);
+  await botLog(
+    `📣 <@${interaction.member!.user.id}> posted Match #${matchId}: ${match.facility_name} · ${match.court_name}, ${torontoLabel(new Date(match.kickoff_time))}, ${money(match.checkout_price_cents)}/player`,
+  );
+}
+
+/**
+ * Deletes SORY's posts in #games except the new game card (older cards, old lists, mentions), and
+ * forgets the deleted cards. Returns the numbers of games that are still open but no longer shown.
+ */
+async function clearGamesChannel(channelId: string, keepId: string, botId: string): Promise<number[]> {
+  const old: string[] = [];
+  let before = "";
+  for (let page = 0; page < 10; page++) {
+    const batch = await discord<{ id: string; author: { id: string } }[]>("GET", `/channels/${channelId}/messages?limit=100${before && `&before=${before}`}`);
+    old.push(...batch.filter((m) => m.id !== keepId && m.author.id === botId).map((m) => m.id));
+    if (batch.length < 100) break;
+    before = batch[batch.length - 1].id;
+  }
+  for (const id of old) {
+    await discord("DELETE", `/channels/${channelId}/messages/${id}`).catch((err) => console.error("Couldn't delete an old #games post", err));
+  }
+  if (!old.length) return [];
+  const hidden = await sql<{ match_id: number; status: string }[]>`
+    UPDATE matches SET message_id = NULL WHERE channel_id = ${channelId} AND message_id IN ${sql(old)} RETURNING match_id, status`;
+  return hidden.filter((m) => m.status === "OPEN").map((m) => m.match_id);
 }
 
 const DEFAULT_DAYS = 7;

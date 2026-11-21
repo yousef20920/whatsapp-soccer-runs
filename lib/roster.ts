@@ -1,16 +1,16 @@
 import { randomUUID } from "node:crypto";
 import type postgres from "postgres";
 import { sql, type Match, type Registration } from "./db.js";
-import { discord } from "./discord.js";
+import { botLog, commandsChannelId, discord } from "./discord.js";
 import { lobbyMessage } from "./lobby.js";
-import { cardFeeCents, LEAVE_CUTOFF_HOURS, money } from "./pricing.js";
+import { cancellationFeeCents, LEAVE_CUTOFF_HOURS, money } from "./pricing.js";
 import { createCheckout, expireCheckout, getCheckout, refund as stripeRefund, stripeEnabled, stripeTestMode, type CheckoutSession } from "./stripe.js";
 import { torontoLabel } from "./time.js";
 
 // Joining and leaving games (first come, first served):
 // - Claim & Pay holds a spot for HOLD_MINUTES while the player pays. If the game is full they join the waitlist.
 // - When a spot frees up, the next waitlisted player is DMed and gets it for OFFER_MINUTES.
-// - Paid players can leave until LEAVE_CUTOFF_HOURS before kickoff and are refunded minus the card fee.
+// - Paid players can leave until LEAVE_CUTOFF_HOURS before kickoff and are refunded minus a cancellation fee.
 // Payments: with STRIPE_SECRET_KEY set, each hold gets its own Stripe Checkout page and SORY checks Stripe
 // to confirm the payment (from the return page and the once-a-minute sweep). Without it, a test Pay button
 // records MOCK payments.
@@ -31,7 +31,8 @@ export interface Result {
 interface Effects {
   changed: boolean; // the lobby card needs redrawing
   offers: string[]; // waitlisted players to DM about a free spot
-  dms: { userId: string; content: string }[]; // receipts and late-payment refunds
+  dms: { userId: string; content: string; components?: unknown[] }[]; // receipts and late-payment refunds
+  logs: string[]; // lines for #bot-logs
 }
 type Reg = Registration & { id: number; stripe_session_id: string | null; checkout_url: string | null };
 
@@ -58,7 +59,7 @@ const lines = (...parts: string[]) => parts.filter(Boolean).join("\n");
  * (expired holds, waitlist offers). Redraws the lobby and sends DMs once the change is saved.
  */
 async function withGame(matchId: number, action: (tx: Tx, match: Match, fx: Effects) => Promise<Result>): Promise<Result> {
-  const fx: Effects = { changed: false, offers: [], dms: [] };
+  const fx: Effects = { changed: false, offers: [], dms: [], logs: [] };
   let match: Match | undefined;
   const result = (await sql.begin(async (tx) => {
     [match] = await tx<Match[]>`SELECT * FROM matches WHERE match_id = ${matchId} FOR UPDATE`;
@@ -78,6 +79,7 @@ async function tidy(tx: Tx, match: Match, fx: Effects) {
     if (await endCheckout(tx, match, reg, fx)) continue; // paid just in time: they're in
     await releaseHold(tx, reg.id);
     fx.changed = true;
+    fx.logs.push(`⌛ <@${reg.discord_user_id}>'s ${reg.offered_at ? "waitlist offer" : "hold"} on Match #${match.match_id} ran out unpaid`);
   }
   await offerFreeSpots(tx, match, fx);
 }
@@ -143,7 +145,8 @@ async function recordStripePayment(tx: Tx, match: Match, userId: string, session
       UPDATE registrations SET status = 'CONFIRMED', hold_expires_at = NULL, checkout_url = NULL, paid_at = ${new Date()}, left_at = NULL
       WHERE match_id = ${match.match_id} AND discord_user_id = ${userId}`;
     fx.changed = true;
-    fx.dms.push({ userId, content: receipt(match, amount) });
+    fx.dms.push({ userId, content: receipt(match, amount), components: leaveButton(match) });
+    fx.logs.push(`💳 <@${userId}> paid ${money(amount)} for Match #${match.match_id} (Stripe${stripeTestMode() ? " test" : ""})`);
     return "confirmed";
   }
 
@@ -157,9 +160,14 @@ async function recordStripePayment(tx: Tx, match: Match, userId: string, session
       : match.status === "CANCELLED"
         ? "The game was cancelled, so your payment"
         : "Your payment came in after your hold ran out and the game had filled up, so it";
+  fx.logs.push(`↩️ Refunded ${money(amount)} to <@${userId}> on Match #${match.match_id}: payment came too late or twice`);
   fx.dms.push({ userId, content: `↩️ ${why} was refunded in full (${money(amount)}): ${title(match)}, ${when(match)}.` });
   return "refunded";
 }
+
+const leaveButton = (match: Match) => [
+  { type: 1, components: [{ type: 2, style: 4, label: "Leave Match", custom_id: `leave:${match.match_id}` }] },
+];
 
 function receipt(match: Match, amountCents: number): string {
   return lines(
@@ -178,7 +186,10 @@ async function offerFreeSpots(tx: Tx, match: Match, fx: Effects) {
     UPDATE registrations SET status = 'PENDING', offered_at = ${new Date()}, hold_expires_at = ${until}
     WHERE id IN (SELECT id FROM registrations WHERE match_id = ${match.match_id} AND status = 'WAITLIST' ORDER BY created_at LIMIT ${free})
     RETURNING discord_user_id`;
-  for (const o of offered) await attachCheckout(tx, match, o.discord_user_id, until);
+  for (const o of offered) {
+    await attachCheckout(tx, match, o.discord_user_id, until);
+    fx.logs.push(`📋 Offered a freed spot in Match #${match.match_id} to <@${o.discord_user_id}> from the waitlist`);
+  }
   if (offered.length) fx.changed = true;
   fx.offers.push(...offered.map((r) => r.discord_user_id));
 }
@@ -270,6 +281,7 @@ export function claim(matchId: number, player: Player): Promise<Result> {
         created_at = EXCLUDED.created_at, offered_at = NULL, paid_at = NULL, left_at = NULL,
         stripe_session_id = NULL, checkout_url = NULL`;
     fx.changed = true;
+    if (full) fx.logs.push(`📋 <@${player.id}> joined the waitlist for Match #${matchId}`);
     if (!full) return payPrompt(match, holdUntil!, false, await attachCheckout(tx, match, player.id, holdUntil!));
     return {
       content: `📋 The game is full. You're **#${await waitlistPosition(tx, matchId, player.id)} on the waitlist**. If a spot opens I'll DM you and hold it for ${OFFER_MINUTES} minutes.`,
@@ -299,7 +311,8 @@ export function pay(matchId: number, player: Player): Promise<Result> {
       UPDATE registrations SET status = 'CONFIRMED', hold_expires_at = NULL, paid_at = ${new Date()}
       WHERE match_id = ${matchId} AND discord_user_id = ${player.id}`;
     fx.changed = true;
-    return { content: receipt(match, amount), components: [] };
+    fx.logs.push(`💳 <@${player.id}> paid ${money(amount)} for Match #${matchId} (test payment)`);
+    return { content: receipt(match, amount), components: leaveButton(match) };
   });
 }
 
@@ -316,6 +329,7 @@ export function leave(matchId: number, player: Player): Promise<Result> {
     if (reg.status === "WAITLIST" || reg.status === "PENDING") {
       await releaseHold(tx, reg.id);
       fx.changed = true;
+      fx.logs.push(`👋 <@${player.id}> ${reg.status === "WAITLIST" ? "left the waitlist" : "gave up their hold"} on Match #${matchId}`);
       await offerFreeSpots(tx, match, fx);
       return {
         content: reg.status === "WAITLIST" ? "👋 You're off the waitlist." : "👋 Spot released. You weren't charged.",
@@ -326,9 +340,9 @@ export function leave(matchId: number, player: Player): Promise<Result> {
     const late = cutoffPassed(match);
     if (late) return { content: late, components: [] };
     const paid = (await latestPayment(tx, matchId, player.id))?.amount_cents ?? 0;
-    const refund = Math.max(0, paid - cardFeeCents(paid));
+    const refund = Math.max(0, paid - cancellationFeeCents(paid));
     return {
-      content: `Leave ${title(match)}, ${torontoLabel(new Date(match.kickoff_time))}? You'll get **${money(refund)}** back (your ${money(paid)} minus the ${money(paid - refund)} card fee).`,
+      content: `Leave ${title(match)}, ${torontoLabel(new Date(match.kickoff_time))}? You'll get **${money(refund)}** back (your ${money(paid)} minus a ${money(paid - refund)} cancellation fee).`,
       components: [
         {
           type: 1,
@@ -342,7 +356,7 @@ export function leave(matchId: number, player: Player): Promise<Result> {
   });
 }
 
-/** "Yes, leave" from the confirmation: refund minus the card fee and pass the spot on. */
+/** "Yes, leave" from the confirmation: refund minus the cancellation fee and pass the spot on. */
 export function leaveConfirmed(matchId: number, player: Player): Promise<Result> {
   return withGame(matchId, async (tx, match, fx) => {
     if (match.status === "CANCELLED") return { content: cancelledText(match), components: [] };
@@ -353,8 +367,9 @@ export function leaveConfirmed(matchId: number, player: Player): Promise<Result>
 
     const payment = await latestPayment(tx, matchId, player.id);
     const paid = payment?.amount_cents ?? 0;
-    const refund = Math.max(0, paid - cardFeeCents(paid));
+    const refund = Math.max(0, paid - cancellationFeeCents(paid));
     if (payment) await refundPayment(tx, matchId, player.id, payment, refund, "leave");
+    fx.logs.push(`👋 <@${player.id}> left Match #${matchId}: refunded ${money(refund)}, kept ${money(paid - refund)} cancellation fee`);
     await tx`
       UPDATE registrations SET status = 'CANCELLED', paid_at = NULL, left_at = ${new Date()}
       WHERE match_id = ${matchId} AND discord_user_id = ${player.id}`;
@@ -362,7 +377,7 @@ export function leaveConfirmed(matchId: number, player: Player): Promise<Result>
     await offerFreeSpots(tx, match, fx);
     return {
       content: lines(
-        `👋 You've left Match #${matchId}. Refund: **${money(refund)}** (your ${money(paid)} minus the ${money(paid - refund)} card fee).`,
+        `👋 You've left Match #${matchId}. Refund: **${money(refund)}** (your ${money(paid)} minus a ${money(paid - refund)} cancellation fee).`,
         stripeEnabled() ? "-# Card refunds usually show up in 5 to 10 business days." : "",
         doneNote(),
       ),
@@ -400,6 +415,7 @@ export async function sweep(): Promise<number> {
         for (const reg of holds) if (!(await endCheckout(tx, match, reg, fx))) await releaseHold(tx, reg.id);
         await tx`UPDATE matches SET status = 'LOCKED' WHERE match_id = ${match_id}`;
         fx.changed = true;
+        fx.logs.push(`🔒 Match #${match_id} kicked off: roster closed`);
       }
       return { content: "" };
     }).catch((err) => console.error(`Sweep of Match #${match_id} failed`, err));
@@ -417,7 +433,8 @@ export function rosterOf(matchId: number) {
 
 /** After a change is saved: redraw the lobby card and DM waitlisted players about their spot. */
 async function announce(before: Match, fx: Effects) {
-  for (const dm of fx.dms) await sendDm(dm.userId, dm.content);
+  for (const line of fx.logs) await botLog(line);
+  for (const dm of fx.dms) await sendDm(dm.userId, dm.content, dm.components);
   if (!fx.changed && !fx.offers.length) return;
   const [match] = await sql<Match[]>`SELECT * FROM matches WHERE match_id = ${before.match_id}`;
   if (fx.changed && match.channel_id && match.message_id) {
@@ -428,10 +445,10 @@ async function announce(before: Match, fx: Effects) {
   for (const userId of fx.offers) await offerSpot(match, userId);
 }
 
-async function sendDm(userId: string, content: string) {
+async function sendDm(userId: string, content: string, components?: unknown[]) {
   try {
     const dm = await discord<{ id: string }>("POST", "/users/@me/channels", { recipient_id: userId });
-    await discord("POST", `/channels/${dm.id}/messages`, { content, allowed_mentions: { parse: [] } });
+    await discord("POST", `/channels/${dm.id}/messages`, { content, components, allowed_mentions: { parse: [] } });
   } catch (err) {
     console.error(`Couldn't DM ${userId}`, err);
   }
@@ -471,8 +488,8 @@ async function offerSpot(match: Match, userId: string) {
     const dm = await discord<{ id: string }>("POST", "/users/@me/channels", { recipient_id: userId });
     await discord("POST", `/channels/${dm.id}/messages`, payPrompt(match, reg.hold_expires_at!, true, (reg as Reg).checkout_url));
   } catch {
-    // DMs turned off: ping them under the game instead. Claim & Pay shows them the Pay button.
-    await discord("POST", `/channels/${match.channel_id}/messages`, {
+    // DMs turned off: mention them in the commands channel instead. Claim & Pay on the game shows them the Pay button.
+    await discord("POST", `/channels/${commandsChannelId()}/messages`, {
       content: `<@${userId}> a spot opened up in **Match #${match.match_id}**! Press **Claim & Pay** on the game by <t:${unix(reg.hold_expires_at!)}:t> to take it.`,
       allowed_mentions: { users: [userId] },
     }).catch((err) => console.error("Couldn't tell a waitlisted player about their spot", err));
@@ -538,10 +555,10 @@ export async function cancelPreview(matchId: number): Promise<{ match: Match; pa
 }
 
 /**
- * Cancels a game: everyone who paid gets back everything they paid for it (card fee included),
+ * Cancels a game: everyone who paid gets back everything they paid for it (no cancellation fee),
  * holds and the waitlist are cleared, the card turns grey and every player is told why.
  */
-export async function cancelGame(matchId: number, reason: string | null): Promise<string> {
+export async function cancelGame(matchId: number, reason: string | null, byUserId?: string): Promise<string> {
   type Affected = { discord_user_id: string; status: Registration["status"]; refund: number };
   let match: Match | undefined;
   let affected: Affected[] = [];
@@ -552,7 +569,7 @@ export async function cancelGame(matchId: number, reason: string | null): Promis
     if (match.status === "LOCKED" || started(match)) return `Match #${matchId} has already started, so it can't be cancelled.`;
 
     // Close open Checkout pages first; anyone who paid in the meantime is refunded below with everyone else.
-    const fx: Effects = { changed: false, offers: [], dms: [] };
+    const fx: Effects = { changed: false, offers: [], dms: [], logs: [] }; // cancellation DMs replace receipts
     const holds = await tx<Reg[]>`SELECT * FROM registrations WHERE match_id = ${matchId} AND status = 'PENDING'`;
     for (const reg of holds) await endCheckout(tx, match, reg, fx);
 
@@ -561,7 +578,7 @@ export async function cancelGame(matchId: number, reason: string | null): Promis
     for (const a of affected.filter((a) => a.status === "CONFIRMED")) {
       const payment = await latestPayment(tx, matchId, a.discord_user_id);
       if (!payment) continue;
-      a.refund = payment.amount_cents; // everything they paid, card fee included
+      a.refund = payment.amount_cents; // everything they paid, no cancellation fee
       await refundPayment(tx, matchId, a.discord_user_id, payment, a.refund, "cancel");
     }
     await tx`
@@ -600,8 +617,8 @@ export async function cancelGame(matchId: number, reason: string | null): Promis
       unreachable.push(a.discord_user_id);
     }
   }
-  if (unreachable.length && game.channel_id) {
-    await discord("POST", `/channels/${game.channel_id}/messages`, {
+  if (unreachable.length) {
+    await discord("POST", `/channels/${commandsChannelId()}/messages`, {
       content: `${unreachable.map((id) => `<@${id}>`).join(" ")} ${header} Anyone who paid has been refunded in full.`,
       allowed_mentions: { users: unreachable.slice(0, 100) },
     }).catch((err) => console.error("Couldn't mention players about the cancellation", err));
@@ -609,6 +626,7 @@ export async function cancelGame(matchId: number, reason: string | null): Promis
 
   const paid = affected.filter((a) => a.refund > 0);
   const total = paid.reduce((s, a) => s + a.refund, 0);
+  await botLog(`❌ Match #${matchId} cancelled${byUserId ? ` by <@${byUserId}>` : ""}${why}: refunded ${paid.length} player(s) ${money(total)}${modeNote()}`);
   return [
     `❌ Match #${matchId} is cancelled${why}.`,
     paid.length ? `Refunded ${paid.length} player${paid.length === 1 ? "" : "s"} ${money(total)} in total${modeNote()}.` : "No one had paid yet.",

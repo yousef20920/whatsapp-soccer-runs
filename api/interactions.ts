@@ -3,7 +3,7 @@ import { available, cancelPrompt, confirmMatch, dateAutocomplete, newGame, roste
 import { cancelGame, claim, leave, leaveConfirmed, pay, type Result } from "../lib/roster.js";
 import { startPoll, vote } from "../lib/polls.js";
 import { parseReserveButton, parseReserveCommand, reserve } from "../lib/reserve.js";
-import { editReply, EPHEMERAL, InteractionType, isOrganizer, isValidSignature, json, playerOf, ResponseType, type Interaction } from "../lib/discord.js";
+import { botLog, editReply, EPHEMERAL, InteractionType, isOrganizer, isValidSignature, json, playerOf, ResponseType, type Interaction } from "../lib/discord.js";
 
 // Discord sends every slash command and button click here (the app's Interactions Endpoint URL).
 export async function POST(request: Request): Promise<Response> {
@@ -79,7 +79,7 @@ function gameButton(interaction: Interaction): Response {
     if (!isOrganizer(interaction)) return message({ content: "Only organizers can cancel games.", flags: EPHEMERAL });
     const reason = (interaction.data?.custom_id ?? "").split(":").slice(2).join(":") || null;
     waitUntil(
-      cancelGame(Number(id), reason)
+      cancelGame(Number(id), reason, playerOf(interaction).id)
         .then((content) => editReply(interaction, { content, components: [], allowed_mentions: { parse: [] } }))
         .catch((err) => failLater(interaction, err)),
     );
@@ -118,5 +118,7 @@ function message(data: { content: string; flags?: number }) {
 
 async function failLater(interaction: Interaction, err: unknown) {
   console.error(err);
+  const what = interaction.data?.name ? `/${interaction.data.name}` : `button ${interaction.data?.custom_id ?? ""}`;
+  await botLog(`⚠️ ${what} failed for <@${playerOf(interaction).id}>: ${String((err as Error)?.message ?? err).slice(0, 300)}`);
   await editReply(interaction, { content: "⚠️ Something went wrong. Please try again in a minute." }).catch(console.error);
 }

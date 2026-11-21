@@ -1,5 +1,5 @@
 import { sql, type Match } from "./db.js";
-import { discord, editReply, env, followUpPrivately, option, playerOf, type Interaction } from "./discord.js";
+import { botLog, commandsChannelId, discord, editReply, env, followUpPrivately, option, playerOf, type Interaction } from "./discord.js";
 import { addList } from "./lobby.js";
 import { money } from "./pricing.js";
 import { addDays, dayLabel, resolveDate, torontoLabel, torontoToday } from "./time.js";
@@ -43,7 +43,7 @@ function pollMessage(poll: Poll, votes: Vote[], gameLink?: string) {
     ? "This poll is closed."
     : ready
       ? `✅ **Enough players!** Organizers will book a field and post the game in #games. Still tap **I'm in** if you want to play.`
-      : `Tap **I'm in** if you'd play. Once **${POLL_MIN_PLAYERS}** people are in, organizers book a field and post the game here with the price.`;
+      : `Tap **I'm in** if you'd play. Once **${POLL_MIN_PLAYERS}** people are in, organizers book a field and post the game in #games with the price.`;
   const fields: { name: string; value: string }[] = [];
   addList(fields, `In: ${ins.length}/${POLL_MIN_PLAYERS}`, ins.map((v, i) => `${i + 1}. <@${v.discord_user_id}>`), "No one yet.");
   if (outs.length) fields.push({ name: "Can't make it", value: String(outs.length) });
@@ -87,7 +87,7 @@ export async function startPoll(interaction: Interaction): Promise<void> {
   if (existing?.message_id) return void (await reply(`There's already a poll for ${dayLabel(day)}: ${pollLink(existing)}`));
 
   const player = playerOf(interaction);
-  const channelId = env("GAMES_CHANNEL_ID");
+  const channelId = commandsChannelId();
   const [poll] = await sql<Poll[]>`
     INSERT INTO polls (game_day, channel_id, created_by) VALUES (${day}, ${channelId}, ${player.id})
     ON CONFLICT DO NOTHING RETURNING ${POLL_COLUMNS}`;
@@ -99,6 +99,7 @@ export async function startPoll(interaction: Interaction): Promise<void> {
     const message = await discord<{ id: string }>("POST", `/channels/${channelId}/messages`, pollMessage(poll, await votesOf(poll.poll_id)));
     await sql`UPDATE polls SET message_id = ${message.id} WHERE poll_id = ${poll.poll_id}`;
     await reply(`✅ Poll for ${dayLabel(day)} posted: ${pollLink({ ...poll, message_id: message.id })}`);
+    await botLog(`🗳️ <@${player.id}> started Poll #${poll.poll_id} for ${dayLabel(day)}`);
   } catch (err) {
     await sql`DELETE FROM polls WHERE poll_id = ${poll.poll_id}`;
     throw err;
@@ -133,6 +134,7 @@ export async function vote(interaction: Interaction, pollId: number, answer: "IN
 
 async function tellOrganizers(poll: Poll) {
   const ymd = poll.game_day;
+  await botLog(`🗳️ Poll #${poll.poll_id} (${dayLabel(ymd)}) reached ${POLL_MIN_PLAYERS} players`);
   await discord("POST", `/channels/${env("ORGANIZERS_CHANNEL_ID")}/messages`, {
     content: [
       `✅ **${POLL_MIN_PLAYERS} players are in for ${dayLabel(ymd)}.** Time to book a field.`,
@@ -204,10 +206,11 @@ export async function invitePollVoters(poll: Poll, match: Match, voterIds: strin
     }
   }
   if (unreachable.length) {
-    await discord("POST", `/channels/${match.channel_id}/messages`, {
+    await discord("POST", `/channels/${commandsChannelId()}/messages`, {
       content: `${unreachable.map((id) => `<@${id}>`).join(" ")} the game you voted for is up. Spots are first come, first served: ${gameLink}`,
       allowed_mentions: { users: unreachable.slice(0, 100) },
     }).catch((err) => console.error("Couldn't mention poll voters", err));
   }
+  await botLog(`🗳️ Poll #${poll.poll_id} closed: Match #${match.match_id} posted, told ${voterIds.length} voter(s) (${dmed} by DM)`);
   return dmed;
 }

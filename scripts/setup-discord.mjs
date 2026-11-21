@@ -25,6 +25,10 @@ const P = {
   EMBED_LINKS: 1n << 14n,
   READ_MESSAGE_HISTORY: 1n << 16n,
   MANAGE_ROLES: 1n << 28n,
+  USE_APPLICATION_COMMANDS: 1n << 31n,
+  CREATE_PUBLIC_THREADS: 1n << 35n,
+  CREATE_PRIVATE_THREADS: 1n << 36n,
+  SEND_MESSAGES_IN_THREADS: 1n << 38n,
 };
 const bits = (...names) => names.reduce((acc, n) => acc | P[n], 0n).toString();
 
@@ -37,7 +41,9 @@ const BOT_PERMISSIONS = bits(
 const CHANNEL = { TEXT: 0, CATEGORY: 4 };
 const ORGANIZER_ROLE = "Organizer";
 
-// Server layout. access: "open" (everyone talks), "readonly" (only Organizers + bot post), "private" (Organizers only).
+// Server layout. access: "open" (everyone talks), "readonly" (only Organizers + bot post), "private" (Organizers only),
+// "buttons" (no one types or runs commands; only the bot's game card and its buttons),
+// "commands" (slash commands only, no chat).
 const LAYOUT = [
   {
     category: "INFO",
@@ -50,7 +56,8 @@ const LAYOUT = [
   {
     category: "GAMES",
     channels: [
-      { name: "games", access: "readonly", topic: "Weekly games. Tap Claim & Pay to join." },
+      { name: "games", access: "buttons", topic: "The current game. Tap Claim & Pay or Leave Match. Use #sory-commands for everything else." },
+      { name: "sory-commands", access: "commands", topic: "Use SORY here: /available, /poll and more. Commands only, no chat." },
       { name: "find-a-sub", access: "open", topic: "Can't make it after the cutoff? Find someone to take your spot." },
     ],
   },
@@ -113,6 +120,23 @@ function overwritesFor(access, guildId, organizerRoleId, botUserId) {
     return [
       { ...everyone, allow: "0", deny: bits("SEND_MESSAGES") },
       { ...organizer, allow: bits("SEND_MESSAGES"), deny: "0" },
+      { ...bot, allow: botAllow, deny: "0" },
+    ];
+  }
+  const noTalk = bits("SEND_MESSAGES", "SEND_MESSAGES_IN_THREADS", "CREATE_PUBLIC_THREADS", "CREATE_PRIVATE_THREADS");
+  if (access === "buttons") {
+    const deny = (BigInt(noTalk) | P.USE_APPLICATION_COMMANDS).toString();
+    return [
+      { ...everyone, allow: "0", deny },
+      { ...organizer, allow: "0", deny },
+      { ...bot, allow: botAllow, deny: "0" },
+    ];
+  }
+  if (access === "commands") {
+    const allow = bits("USE_APPLICATION_COMMANDS");
+    return [
+      { ...everyone, allow, deny: noTalk },
+      { ...organizer, allow, deny: noTalk },
       { ...bot, allow: botAllow, deny: "0" },
     ];
   }

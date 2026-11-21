@@ -1,6 +1,6 @@
 import { isOpen, loadAvailability } from "./availability.js";
 import { sql, type Match } from "./db.js";
-import { editReply, isOrganizer, option, type Interaction } from "./discord.js";
+import { botLog, editReply, isOrganizer, option, type Interaction } from "./discord.js";
 import { money, priceFor } from "./pricing.js";
 import { addDays, dayLabel, minuteLabel, parseTime, resolveDate, shortTime, torontoToDate, torontoToday } from "./time.js";
 import { bookingLink, DEFAULT_FORMAT, dimensions, fieldCost, type Format, FORMATS, sizeFor, venueFor } from "./venues.js";
@@ -129,4 +129,5 @@ export async function reserve(interaction: Interaction, request: ReserveRequest 
       `-# Anyone can still book this slot until you do, so book soon.`,
     ].join("\n"),
   );
+  await botLog(`📝 <@${interaction.member!.user.id}> reserved Draft Match #${match.match_id}: ${venue.name} ${court}, ${dayLabel(ymd)} ${shortTime(startMinute)}, ${money(cost.totalCents)} total`);
 }
