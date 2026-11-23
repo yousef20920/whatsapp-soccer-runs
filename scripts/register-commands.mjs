@@ -76,6 +76,16 @@ const commands = [
       },
       { type: STRING, name: "after", description: "Earliest start, EST (default 5 PM)", choices: AFTER_CHOICES },
       { type: INTEGER, name: "players", description: "Players to split the cost (default: full teams, e.g. 14 for 7v7)", min_value: 2, max_value: 60 },
+      {
+        type: STRING,
+        name: "where",
+        description: "Indoor (domes, Sportsplex) or outdoor fields (default both)",
+        choices: [
+          { name: "Indoor and outdoor", value: "both" },
+          { name: "Indoor only", value: "indoor" },
+          { name: "Outdoor only", value: "outdoor" },
+        ],
+      },
     ],
   },
   {

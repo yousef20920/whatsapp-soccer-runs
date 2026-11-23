@@ -134,6 +134,9 @@ export async function available(interaction: Interaction): Promise<void> {
   const length = option<number>(interaction, "length") ?? DEFAULT_DURATION_MINUTES;
   const players = option<number>(interaction, "players") ?? perSide * 2;
   const afterText = option<string>(interaction, "after") ?? "5pm";
+  // Domes count as indoor: the City lists each dome as its own indoor fields and closes them while the
+  // dome is down for summer, when the outdoor field underneath opens instead. So this holds all year.
+  const where = (option<string>(interaction, "where") ?? "both") as "both" | "indoor" | "outdoor";
   const fromText = option<string>(interaction, "from");
   const toText = option<string>(interaction, "to");
 
@@ -155,11 +158,16 @@ export async function available(interaction: Interaction): Promise<void> {
   for (let ymd = from; ymd <= to; ymd = addDays(ymd, 1)) dates.push(ymd);
 
   const snapshot = await loadAvailability();
-  const found = dates.flatMap((ymd) => findSlots(snapshot, ymd, size, length, afterMinute).map((slot) => ({ ymd, slot })));
+  const found = dates.flatMap((ymd) =>
+    findSlots(snapshot, ymd, size, length, afterMinute)
+      .filter((slot) => where === "both" || (where === "outdoor") === !!slot.venue.outdoor)
+      .map((slot) => ({ ymd, slot })),
+  );
   const sizeLabel = { quarter: "Quarter field", half: "Half field", full: "Full field" }[size];
 
   // One short card per start time, earliest first. Venue size and links go once in the description.
-  const header = `${format} · ${sizeLabel.toLowerCase()} · ${length} min · after ${shortTime(afterMinute)} EST · ${players} players`;
+  const whereLabel = { both: "", indoor: " · indoor only", outdoor: " · outdoor only" }[where];
+  const header = `${format} · ${sizeLabel.toLowerCase()}${whereLabel} · ${length} min · after ${shortTime(afterMinute)} EST · ${players} players`;
   const note = "-# Price per player includes the card fee. Totals include HST. Resident rates. Only organizers can reserve.";
   const card = ({ ymd, slot: s }: (typeof found)[number], i: number) => ({
     name: `${i + 1}. 📅 ${dayLabel(ymd).replace(",", "")} · 🕐 ${shortTime(s.start)}–${shortTime(s.start + length)} · 📍 ${s.venue.name} ${s.label}`,
@@ -198,7 +206,7 @@ export async function available(interaction: Interaction): Promise<void> {
         title: `🔎 ${found.length} open · ${range}`,
         description: found.length
           ? `${header}\n${venues}\n${note}${more}`
-          : `No openings for ${format} after ${shortTime(afterMinute)}. Try another day, an earlier time, or a smaller format.`,
+          : `No ${where === "both" ? "" : `${where} `}openings for ${format} after ${shortTime(afterMinute)}. Try another day, an earlier time, ${where === "both" ? "or a smaller format" : "a smaller format, or indoor and outdoor"}.`,
         color: 0x3498db,
         fields,
         footer: { text: `Asked by ${displayName(interaction)} · Source: Active Mississauga${snapshot.stale ? " · ⚠️ some data may be out of date" : ""} · checked` },
@@ -218,7 +226,7 @@ export async function available(interaction: Interaction): Promise<void> {
   };
 
   // Same search, same openings and prices as the last list in this channel: point to it instead of reposting.
-  const searchKey = [format, length, afterMinute, players, from, to].join("|");
+  const searchKey = [format, length, afterMinute, players, from, to, where].join("|");
   const resultsHash = createHash("sha256")
     .update(JSON.stringify(found.map(({ ymd, slot: s }) => [ymd, s.resourceIds, s.start, s.cost.totalCents])))
     .digest("hex");

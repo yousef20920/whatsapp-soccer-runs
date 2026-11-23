@@ -114,7 +114,7 @@ export const VENUES: Venue[] = [
   },
   {
     name: "Paramount Dome",
-    address: "Mississauga Sports & Entertainment Centre, 5600 Rose Cherry Pl (outdoor fields)",
+    address: "Mississauga Sports & Entertainment Centre Fields and Dome, 5745 Rose Cherry Pl",
     pitch: { lengthM: 100, widthM: 64 },
     links: [
       { label: "Info", url: "https://www.mississauga.ca/recreation-and-sports/locations/paramount-fine-foods-centre-sportsplex/" },
