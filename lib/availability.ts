@@ -99,16 +99,19 @@ export interface Slot {
   venue: Venue;
   label: string; // "F1+F2"
   resourceIds: number[];
-  open: Window; // the whole free window
-  bestStart: number; // cheapest start inside the window (earliest on ties)
-  cost: FieldCost; // for the requested length from bestStart
+  start: number; // minutes after midnight, Toronto time
+  cost: FieldCost; // for the requested length from start
 }
 
-/** Bookable openings on one day for the given field size, length and earliest start. */
+/**
+ * Every bookable start on one day for the given field size, length and earliest start: the first
+ * possible start in each free window, then every hour on the hour after it. Earliest first.
+ */
 export function findSlots(snapshot: Snapshot, ymd: string, size: Size, lengthMinutes: number, afterMinute: number): Slot[] {
   const slots: Slot[] = [];
   const earliestBookable = Date.now() + MIN_NOTICE_MS;
   const [y, m, d] = ymd.split("-").map(Number) as [number, number, number];
+  const bookable = (start: number) => torontoToDate([y, m, d], [Math.floor(start / 60) % 24, start % 60]).getTime() >= earliestBookable;
 
   for (const venue of VENUES) {
     const groups =
@@ -118,23 +121,18 @@ export function findSlots(snapshot: Snapshot, ymd: string, size: Size, lengthMin
       const perField = ids.map((id) => snapshot.byResource.get(id)?.[ymd]);
       if (perField.some((w) => !w)) continue;
       const windows = perField.slice(1).reduce((acc, w) => intersect(acc!, w!), perField[0])!;
+      const label = size === "full" ? "Full field" : ids.map((id) => venue.quarters.find((q) => q.id === id)!.label).join("+");
 
       for (const open of windows) {
-        let best: { start: number; cost: FieldCost } | undefined;
-        const first = Math.ceil(Math.max(open.start, afterMinute) / 15) * 15;
-        for (let start = first; start + lengthMinutes <= open.end; start += 15) {
-          const startsAt = torontoToDate([y, m, d], [Math.floor(start / 60) % 24, start % 60]).getTime();
-          if (startsAt < earliestBookable) continue;
-          const cost = fieldCost(venue, ymd, start, lengthMinutes, ids.length);
-          if (!best || cost.totalCents < best.cost.totalCents) best = { start, cost };
+        let first = Math.ceil(Math.max(open.start, afterMinute) / 15) * 15;
+        while (first + lengthMinutes <= open.end && !bookable(first)) first += 15;
+        for (let start = first; start + lengthMinutes <= open.end; start = start === first ? Math.floor(first / 60) * 60 + 60 : start + 60) {
+          slots.push({ venue, label, resourceIds: ids, start, cost: fieldCost(venue, ymd, start, lengthMinutes, ids.length) });
         }
-        if (!best) continue;
-        const label = ids.map((id) => venue.quarters.find((q) => q.id === id)!.label).join("+");
-        slots.push({ venue, label: size === "full" ? "Full field" : label, resourceIds: ids, open, bestStart: best.start, cost: best.cost });
       }
     }
   }
-  return slots.sort((a, b) => a.bestStart - b.bestStart || a.cost.totalCents - b.cost.totalCents);
+  return slots.sort((a, b) => a.start - b.start || a.cost.totalCents - b.cost.totalCents);
 }
 
 /** True when every field in `resourceIds` is free for the whole game. */

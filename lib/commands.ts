@@ -118,7 +118,8 @@ async function clearGamesChannel(channelId: string, keepId: string, botId: strin
 }
 
 const DEFAULT_DAYS = 7;
-const MAX_SLOTS_SHOWN = 10; // ~350 characters per card; Discord allows 6000 per message
+const MAX_SLOTS_SHOWN = 25; // Discord allows 25 fields and 25 buttons per message
+const EMBED_CHAR_BUDGET = 5600; // Discord allows 6000 characters per message's embeds; keep some room
 
 /**
  * /available: open Mississauga turf with total cost and per-player price. Anyone can run it and the
@@ -157,26 +158,38 @@ export async function available(interaction: Interaction): Promise<void> {
   const found = dates.flatMap((ymd) => findSlots(snapshot, ymd, size, length, afterMinute).map((slot) => ({ ymd, slot })));
   const sizeLabel = { quarter: "Quarter field", half: "Half field", full: "Full field" }[size];
 
-  // One short card per opening: when/where, price, then format and links.
-  const shown = found.slice(0, MAX_SLOTS_SHOWN);
-  const fields = shown.map(({ ymd, slot: s }, i) => {
-    const end = s.bestStart + length;
-    const perPlayer = priceFor(s.cost.totalCents, players).checkoutCents;
-    const links = [`[Book](${bookingLink(s.resourceIds[0])})`, ...s.venue.links.map((l) => `[${l.label}](${l.url})`)].join(" · ");
-    const widerWindow = s.open.start < s.bestStart || s.open.end > end ? ` · 🟢 open ${shortTime(s.open.start)}–${shortTime(s.open.end)}` : "";
-    const dims = `${dimensions(s.venue, size)}${s.venue.pitch.estimated ? " (est.)" : ""}`;
-    return {
-      name: `${i + 1}. 📅 ${dayLabel(ymd).replace(",", "")} · 🕐 ${shortTime(s.bestStart)}–${shortTime(end)} · 📍 ${s.venue.name} ${s.label}`,
-      value: [
-        `💵 **${money(perPlayer)}/player** · ${money(s.cost.totalCents)} total · ${s.cost.rate}`,
-        `⚽ ${format} · 📏 ${dims}${widerWindow}`,
-        `🔗 ${links}`,
-      ].join("\n"),
-    };
+  // One short card per start time, earliest first. Venue size and links go once in the description.
+  const header = `${format} · ${sizeLabel.toLowerCase()} · ${length} min · after ${shortTime(afterMinute)} EST · ${players} players`;
+  const note = "-# Price per player includes the card fee. Totals include HST. Resident rates. Only organizers can reserve.";
+  const card = ({ ymd, slot: s }: (typeof found)[number], i: number) => ({
+    name: `${i + 1}. 📅 ${dayLabel(ymd).replace(",", "")} · 🕐 ${shortTime(s.start)}–${shortTime(s.start + length)} · 📍 ${s.venue.name} ${s.label}`,
+    value: `💵 **${money(priceFor(s.cost.totalCents, players).checkoutCents)}/player** · ${money(s.cost.totalCents)} total · ${s.cost.rate} · [Book](${bookingLink(s.resourceIds[0])})`,
   });
+  const venueLine = (v: (typeof found)[number]["slot"]["venue"]) =>
+    `📍 **${v.name}** · ${dimensions(v, size)}${v.pitch.estimated ? " (est.)" : ""} · ${v.links.map((l) => `[${l.label}](${l.url})`).join(" · ")}`;
+
+  // Show as many as fit in one message.
+  const shown: typeof found = [];
+  const fields: { name: string; value: string }[] = [];
+  let used = header.length + note.length + 300; // title, footer and the "showing" line
+  const venuesShown = new Set<string>();
+  for (const item of found) {
+    if (shown.length >= MAX_SLOTS_SHOWN) break;
+    const f = card(item, shown.length);
+    const extra = venuesShown.has(item.slot.venue.name) ? 0 : venueLine(item.slot.venue).length + 1;
+    if (used + f.name.length + f.value.length + extra > EMBED_CHAR_BUDGET) break;
+    used += f.name.length + f.value.length + extra;
+    venuesShown.add(item.slot.venue.name);
+    shown.push(item);
+    fields.push(f);
+  }
+  const venues = [...new Map(shown.map(({ slot }) => [slot.venue.name, slot.venue])).values()].map(venueLine).join("\n");
 
   const range = dates.length === 1 ? dayLabel(dates[0]) : `${dayLabel(dates[0])} – ${dayLabel(dates[dates.length - 1])}`;
-  const more = found.length > MAX_SLOTS_SHOWN ? `\nShowing ${MAX_SLOTS_SHOWN} of ${found.length} · narrow \`from:\` and \`to:\`` : "";
+  const more =
+    found.length > shown.length
+      ? `\nShowing the first ${shown.length} of ${found.length} · for later ones, use a later \`after:\` or \`from:\``
+      : "";
   const checked = Math.floor(snapshot.oldestFetch.getTime() / 1000);
   const list = {
     allowed_mentions: { parse: [] },
@@ -184,7 +197,7 @@ export async function available(interaction: Interaction): Promise<void> {
       {
         title: `🔎 ${found.length} open · ${range}`,
         description: found.length
-          ? `${format} · ${sizeLabel.toLowerCase()} · ${length} min · after ${shortTime(afterMinute)} EST · ${players} players\n-# Price per player includes the card fee. Totals include HST. Resident rates. Only organizers can reserve.${more}`
+          ? `${header}\n${venues}\n${note}${more}`
           : `No openings for ${format} after ${shortTime(afterMinute)}. Try another day, an earlier time, or a smaller format.`,
         color: 0x3498db,
         fields,
@@ -198,7 +211,7 @@ export async function available(interaction: Interaction): Promise<void> {
         type: 2,
         style: 1,
         label: `📝 Reserve ${i + 1}`,
-        custom_id: reserveButtonId({ resourceIds: s.resourceIds, ymd, startMinute: s.bestStart, lengthMinutes: length, format, players }),
+        custom_id: reserveButtonId({ resourceIds: s.resourceIds, ymd, startMinute: s.start, lengthMinutes: length, format, players }),
       })),
       5,
     ).map((buttons) => ({ type: 1, components: buttons })),
@@ -207,7 +220,7 @@ export async function available(interaction: Interaction): Promise<void> {
   // Same search, same openings and prices as the last list in this channel: point to it instead of reposting.
   const searchKey = [format, length, afterMinute, players, from, to].join("|");
   const resultsHash = createHash("sha256")
-    .update(JSON.stringify(found.map(({ ymd, slot: s }) => [ymd, s.resourceIds, s.bestStart, s.open, s.cost.totalCents])))
+    .update(JSON.stringify(found.map(({ ymd, slot: s }) => [ymd, s.resourceIds, s.start, s.cost.totalCents])))
     .digest("hex");
   await postOnce(interaction, searchKey, resultsHash, list, reply);
 }
