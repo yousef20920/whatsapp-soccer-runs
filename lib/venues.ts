@@ -27,13 +27,15 @@ export interface Quarter {
 
 export interface Venue {
   name: string;
+  /** Outdoor artificial pitch: each "quarter" entry is a whole field, booked on its own. Closed in winter. */
+  outdoor?: boolean;
   address: string;
   /** full pitch in metres; a half is half the length, a quarter half the length and width */
   pitch: { lengthM: number; widthM: number; estimated?: boolean };
   links: { label: string; url: string }[];
   quarters: Quarter[];
   halves: [number, number][];
-  /** cents per quarter field per hour, before HST */
+  /** cents per quarter field per hour (per whole field outdoors), before HST */
   hourlyRateCents(ymd: string, minute: number): number;
 }
 
@@ -56,6 +58,36 @@ const isSummer = (ymd: string) => {
 const domeRate = (ymd: string, minute: number) => (isPrime(ymd, minute) ? 23915 : 12869);
 const sportsplexRate = (ymd: string, minute: number) =>
   isSummer(ymd) ? (isPrime(ymd, minute) ? 17160 : 3655) : isPrime(ymd, minute) ? 23915 : 16827;
+
+// Outdoor artificial fields: City of Mississauga Schedule D (effective Jan 1, 2026), "Artificial Fields:
+// All Sports", resident rate per field per hour, before 13% HST. Same rate all day. Open about May to early October.
+// https://www.mississauga.ca/wp-content/uploads/2026/04/17082245/Schedule-D-Parks-Forestry-and-Environment-Fees-and-Charges.pdf
+const OUTDOOR_RATE_CENTS = 15127;
+
+function outdoor(name: string, address: string, fields: [number, string][]): Venue {
+  return {
+    name,
+    address,
+    outdoor: true,
+    pitch: { lengthM: 100, widthM: 64 }, // not published; only used for the label "full outdoor field"
+    links: [{ label: "Map", url: `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(`${address}, Mississauga, ON`)}` }],
+    quarters: fields.map(([id, label]) => ({ id, label })),
+    halves: [],
+    hourlyRateCents: () => OUTDOOR_RATE_CENTS,
+  };
+}
+
+const OUTDOOR_VENUES: Venue[] = [
+  outdoor("Anaka Park", "Anaka Park", [[2577, "Turf"]]),
+  outdoor("Clarkson SS", "Clarkson Secondary School", [[357, "Turf"]]),
+  outdoor("Courtneypark Athletic Fields", "Courtneypark Athletic Fields", [[158, "Turf"]]),
+  outdoor("Huron Park", "Huron Park", [[795, "Turf"]]),
+  outdoor("Iceland Arena", "Iceland Arena", [[868, "Turf 1"], [848, "Turf 2"]]),
+  outdoor("Lincoln M. Alexander SS", "Lincoln M. Alexander Secondary School", [[2195, "Turf"]]),
+  outdoor("Loyola Catholic SS", "Loyola Catholic Secondary School", [[1069, "Turf"]]),
+  outdoor("Mattamy Sports Park (outdoor)", "5320 Ninth Line", [[120, "Turf 1"], [290, "Turf 2"], [2538, "Turf 3"]]),
+  outdoor("Paramount Fields (outdoor)", "5600 Rose Cherry Pl", [[1296, "Turf 1"], [1298, "Turf 2"]]),
+];
 
 export const VENUES: Venue[] = [
   {
@@ -122,10 +154,12 @@ export const VENUES: Venue[] = [
     ],
     hourlyRateCents: sportsplexRate,
   },
+  ...OUTDOOR_VENUES,
 ];
 
 /** "50×64 m", or "~50×64 m" when the pitch size is an estimate. */
 export function dimensions(venue: Venue, size: "quarter" | "half" | "full"): string {
+  if (venue.outdoor) return "full outdoor field";
   const { lengthM, widthM, estimated } = venue.pitch;
   const [l, w] = size === "full" ? [lengthM, widthM] : size === "half" ? [lengthM / 2, widthM] : [lengthM / 2, widthM / 2];
   return `${estimated ? "~" : ""}${Math.round(l)}×${Math.round(w)} m`;
@@ -141,7 +175,7 @@ export interface FieldCost {
   hstCents: number;
   cityFeeCents: number;
   totalCents: number;
-  rate: "peak" | "off-peak" | "part peak";
+  rate: "peak" | "off-peak" | "part peak" | "outdoor rate";
 }
 
 /** Cost for `quarters` quarter fields from startMinute for lengthMinutes, with the HST split out. */
@@ -158,7 +192,7 @@ export function fieldCost(venue: Venue, ymd: string, startMinute: number, length
   }
   const subtotalCents = Math.round(cents);
   const hstCents = Math.round(subtotalCents * HST);
-  const rate = peakSlices === 0 ? "off-peak" : peakSlices === slices ? "peak" : "part peak";
+  const rate = venue.outdoor ? "outdoor rate" : peakSlices === 0 ? "off-peak" : peakSlices === slices ? "peak" : "part peak";
   const cityFeeCents = SOCCER_FEE_CENTS_PER_FIELD * quarters;
   return { subtotalCents, hstCents, cityFeeCents, totalCents: subtotalCents + hstCents + cityFeeCents, rate };
 }
@@ -169,6 +203,8 @@ export function venueFor(resourceIds: number[]): Venue | undefined {
   return venue && resourceIds.every((id) => venue.quarters.some((q) => q.id === id)) ? venue : undefined;
 }
 
-export const sizeFor = (fieldCount: number) => (fieldCount === 4 ? "full" : fieldCount === 2 ? "half" : "quarter");
+/** Field size from how many quarters are booked. An outdoor field is always a whole field. */
+export const sizeFor = (fieldCount: number, venue?: Venue) =>
+  venue?.outdoor || fieldCount === 4 ? "full" : fieldCount === 2 ? "half" : "quarter";
 
 export const DEFAULT_FORMAT = { quarter: "6v6", half: "9v9", full: "11v11" } as const;

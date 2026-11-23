@@ -114,14 +114,15 @@ export function findSlots(snapshot: Snapshot, ymd: string, size: Size, lengthMin
   const bookable = (start: number) => torontoToDate([y, m, d], [Math.floor(start / 60) % 24, start % 60]).getTime() >= earliestBookable;
 
   for (const venue of VENUES) {
-    const groups =
-      size === "quarter" ? venue.quarters.map((q) => [q.id]) : size === "half" ? venue.halves.map((h) => [...h]) : [venue.quarters.map((q) => q.id)];
+    const groups = venue.outdoor
+      ? venue.quarters.map((q) => [q.id]) // a whole outdoor field suits any format
+      : size === "quarter" ? venue.quarters.map((q) => [q.id]) : size === "half" ? venue.halves.map((h) => [...h]) : [venue.quarters.map((q) => q.id)];
 
     for (const ids of groups) {
       const perField = ids.map((id) => snapshot.byResource.get(id)?.[ymd]);
       if (perField.some((w) => !w)) continue;
       const windows = perField.slice(1).reduce((acc, w) => intersect(acc!, w!), perField[0])!;
-      const label = size === "full" ? "Full field" : ids.map((id) => venue.quarters.find((q) => q.id === id)!.label).join("+");
+      const label = size === "full" && !venue.outdoor ? "Full field" : ids.map((id) => venue.quarters.find((q) => q.id === id)!.label).join("+");
 
       for (const open of windows) {
         let first = Math.ceil(Math.max(open.start, afterMinute) / 15) * 15;

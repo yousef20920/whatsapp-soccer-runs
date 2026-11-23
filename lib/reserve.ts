@@ -82,7 +82,7 @@ export async function reserve(interaction: Interaction, request: ReserveRequest 
   const { resourceIds, ymd, startMinute, lengthMinutes } = request;
   const venue = venueFor(resourceIds);
   if (!venue) return void (await reply("I don't recognize that field."));
-  const size = sizeFor(resourceIds.length);
+  const size = sizeFor(resourceIds.length, venue);
   const format = request.format && FORMATS[request.format] ? request.format : DEFAULT_FORMAT[size];
   const players = request.players ?? FORMATS[format].perSide * 2;
   const end = startMinute + lengthMinutes;
@@ -103,7 +103,7 @@ export async function reserve(interaction: Interaction, request: ReserveRequest 
   const cost = fieldCost(venue, ymd, startMinute, lengthMinutes, resourceIds.length);
   const { baseCents, checkoutCents } = priceFor(cost.totalCents, players);
   const labels = resourceIds.map((id) => venue.quarters.find((q) => q.id === id)!.label);
-  const court = `${size === "full" ? "Full field" : labels.join("+")} (${size})`;
+  const court = venue.outdoor ? `${labels.join("+")} (full outdoor field)` : `${size === "full" ? "Full field" : labels.join("+")} (${size})`;
 
   const [match] = await sql<Match[]>`
     INSERT INTO matches (facility_name, court_name, kickoff_time, duration_minutes, max_players, field_cost_cents,
