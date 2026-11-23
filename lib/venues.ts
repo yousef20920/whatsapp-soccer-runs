@@ -81,12 +81,12 @@ const OUTDOOR_VENUES: Venue[] = [
   outdoor("Anaka Park", "Anaka Park", [[2577, "Turf"]]),
   outdoor("Clarkson SS", "Clarkson Secondary School", [[357, "Turf"]]),
   outdoor("Courtneypark Athletic Fields", "Courtneypark Athletic Fields", [[158, "Turf"]]),
-  outdoor("Huron Park", "Huron Park", [[795, "Turf"]]),
+  outdoor("Huron Park", "830 Paisley Blvd", [[795, "Turf"]]),
   outdoor("Iceland Arena", "Iceland Arena", [[868, "Turf 1"], [848, "Turf 2"]]),
   outdoor("Lincoln M. Alexander SS", "Lincoln M. Alexander Secondary School", [[2195, "Turf"]]),
   outdoor("Loyola Catholic SS", "Loyola Catholic Secondary School", [[1069, "Turf"]]),
   outdoor("Mattamy Sports Park (outdoor)", "5320 Ninth Line", [[120, "Turf 1"], [290, "Turf 2"], [2538, "Turf 3"]]),
-  outdoor("Paramount Fields (outdoor)", "5600 Rose Cherry Pl", [[1296, "Turf 1"], [1298, "Turf 2"]]),
+  outdoor("Paramount Fields (outdoor)", "5745 Rose Cherry Pl", [[1296, "Turf 1"], [1298, "Turf 2"]]),
 ];
 
 export const VENUES: Venue[] = [

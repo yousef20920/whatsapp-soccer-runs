@@ -136,7 +136,8 @@ export async function available(interaction: Interaction): Promise<void> {
   const afterText = option<string>(interaction, "after") ?? "5pm";
   // Domes count as indoor: the City lists each dome as its own indoor fields and closes them while the
   // dome is down for summer, when the outdoor field underneath opens instead. So this holds all year.
-  const where = (option<string>(interaction, "where") ?? "both") as "both" | "indoor" | "outdoor";
+  const whereOption = option<string>(interaction, "where");
+  const where = whereOption === "indoor" || whereOption === "outdoor" ? whereOption : "both";
   const fromText = option<string>(interaction, "from");
   const toText = option<string>(interaction, "to");
 
@@ -166,8 +167,8 @@ export async function available(interaction: Interaction): Promise<void> {
   const sizeLabel = { quarter: "Quarter field", half: "Half field", full: "Full field" }[size];
 
   // One short card per start time, earliest first. Venue size and links go once in the description.
-  const whereLabel = { both: "", indoor: " · indoor only", outdoor: " · outdoor only" }[where];
-  const header = `${format} · ${sizeLabel.toLowerCase()}${whereLabel} · ${length} min · after ${shortTime(afterMinute)} EST · ${players} players`;
+  const fieldLabel = { both: sizeLabel.toLowerCase(), indoor: `${sizeLabel.toLowerCase()} · indoor only`, outdoor: "full outdoor field · outdoor only" }[where];
+  const header = `${format} · ${fieldLabel} · ${length} min · after ${shortTime(afterMinute)} EST · ${players} players`;
   const note = "-# Price per player includes the card fee. Totals include HST. Resident rates. Only organizers can reserve.";
   const card = ({ ymd, slot: s }: (typeof found)[number], i: number) => ({
     name: `${i + 1}. 📅 ${dayLabel(ymd).replace(",", "")} · 🕐 ${shortTime(s.start)}–${shortTime(s.start + length)} · 📍 ${s.venue.name} ${s.label}`,
