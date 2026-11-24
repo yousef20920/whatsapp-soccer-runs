@@ -1,7 +1,9 @@
 import { isOpen, loadAvailability } from "./availability.js";
 import { sql, type Match } from "./db.js";
 import { botLog, editReply, isOrganizer, option, type Interaction } from "./discord.js";
+import { hostReady } from "./payouts.js";
 import { money, priceFor } from "./pricing.js";
+import { stripeEnabled } from "./stripe.js";
 import { addDays, dayLabel, minuteLabel, parseTime, resolveDate, shortTime, torontoToDate, torontoToday } from "./time.js";
 import { bookingLink, DEFAULT_FORMAT, dimensions, fieldCost, type Format, FORMATS, sizeFor, venueFor } from "./venues.js";
 
@@ -117,6 +119,7 @@ export async function reserve(interaction: Interaction, request: ReserveRequest 
 
   const bookLinks = resourceIds.map((id, i) => `[${labels[i]}](${bookingLink(id)})`).join(" · ");
   const autofill = autofillLink({ resourceIds, ymd, startMinute, lengthMinutes, players, matchId: match.match_id });
+  const needsPayouts = stripeEnabled() && !(await hostReady(interaction.member!.user.id).catch(() => true));
   await reply(
     [
       `📝 **Draft Match #${match.match_id}** · not booked yet`,
@@ -131,6 +134,7 @@ export async function reserve(interaction: Interaction, request: ReserveRequest 
       `-# Needs the [SORY Booker extension](${BOOKER_INSTALL_URL}) ${BOOKER_VERSION} or later. Without it, book by hand: ${bookLinks}`,
       `2️⃣ Then run \`/confirm match:${match.match_id}\` to post it in #games`,
       `-# Anyone can still book this slot until you do, so book soon.`,
+      ...(needsPayouts ? [`💸 Players' payments go to you after kickoff. Run \`/payouts\` once to add your bank.`] : []),
     ].join("\n"),
   );
   await botLog(`📝 <@${interaction.member!.user.id}> reserved Draft Match #${match.match_id}: ${venue.name} ${court}, ${dayLabel(ymd)} ${shortTime(startMinute)}, ${money(cost.totalCents)} total`);

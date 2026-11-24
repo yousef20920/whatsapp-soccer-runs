@@ -4,6 +4,7 @@ import { sql, type Match, type Registration } from "./db.js";
 import { botLog, commandsChannelId, discord } from "./discord.js";
 import { lobbyMessage } from "./lobby.js";
 import { cancellationFeeCents, feesFor, LEAVE_CUTOFF_HOURS, money } from "./pricing.js";
+import { payoutLine } from "./payouts.js";
 import { createCheckout, expireCheckout, getCheckout, refund as stripeRefund, stripeEnabled, stripeTestMode, type CheckoutSession } from "./stripe.js";
 import { torontoLabel } from "./time.js";
 
@@ -538,6 +539,7 @@ export async function rosterReport(matchId: number): Promise<string> {
     ``,
     `💵 Collected **${money(totalIn - totalOut)}** (${money(totalIn)} in, ${money(totalOut)} refunded) · field costs ${money(match.field_cost_cents)}`,
     `🎩 Host fee for <@${match.created_by}>: **${money(hostFee * paid.length)}** (${money(hostFee)} × ${paid.length} paid)`,
+    await payoutLine(matchId, match.created_by, new Date(match.kickoff_time), paid.length),
     !stripeEnabled() ? "-# Test mode: no real money moved." : stripeTestMode() ? "-# Stripe test mode: no real money moved." : "",
   ].join("\n");
 }

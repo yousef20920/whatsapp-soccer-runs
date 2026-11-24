@@ -91,3 +91,83 @@ export async function expireCheckout(id: string): Promise<CheckoutSession> {
 export function refund(paymentIntent: string, amountCents: number, idempotencyKey: string) {
   return stripe<{ id: string; status: string }>("POST", "/refunds", { payment_intent: paymentIntent, amount: amountCents }, idempotencyKey);
 }
+
+// ---- Host payouts (Stripe Connect) ----
+// Each host gets a connected account (Accounts v2, recipient configuration, Express dashboard). The club
+// stays the merchant: players pay the club, and after kickoff SORY transfers each payment to the host
+// (separate charges and transfers), keeping back only what Stripe charged for the payment.
+
+const API_V2 = "https://api.stripe.com/v2";
+const V2_VERSION = "2026-10-28.endive";
+
+async function stripeV2<T>(method: "GET" | "POST", path: string, body?: unknown): Promise<T> {
+  const res = await fetch(API_V2 + path, {
+    method,
+    headers: { Authorization: `Bearer ${key()}`, "Stripe-Version": V2_VERSION, ...(body ? { "Content-Type": "application/json" } : {}) },
+    body: body ? JSON.stringify(body) : undefined,
+  });
+  const data = (await res.json()) as T & { error?: { message?: string; code?: string } };
+  if (!res.ok) throw new StripeError(data.error?.message ?? `Stripe ${method} ${path} failed (${res.status})`, data.error?.code);
+  return data;
+}
+
+interface HostAccount {
+  id: string;
+  configuration?: { recipient?: { capabilities?: { stripe_balance?: { stripe_transfers?: { status?: string } } } } };
+}
+
+/** A new connected account for a host. Stripe's own onboarding collects their ID and bank. */
+export function createHostAccount(displayName: string, discordUserId: string) {
+  return stripeV2<HostAccount>("POST", "/core/accounts", {
+    display_name: displayName.slice(0, 100),
+    dashboard: "express",
+    identity: { country: "ca" },
+    defaults: { responsibilities: { fees_collector: "application", losses_collector: "application" } },
+    configuration: { recipient: { capabilities: { stripe_balance: { stripe_transfers: { requested: true } } } } },
+    metadata: { discord_user_id: discordUserId },
+    include: ["configuration.recipient"],
+  });
+}
+
+/** True once the host finished onboarding and can receive transfers. */
+export async function hostCanReceive(accountId: string): Promise<boolean> {
+  const account = await stripeV2<HostAccount>("GET", `/core/accounts/${encodeURIComponent(accountId)}?include=configuration.recipient`);
+  return account.configuration?.recipient?.capabilities?.stripe_balance?.stripe_transfers?.status === "active";
+}
+
+/** A one-time link to Stripe's onboarding (or, once set up, to the host's Express dashboard). */
+export async function hostAccountLink(accountId: string, kind: "onboarding" | "dashboard", returnUrl: string, refreshUrl: string): Promise<string> {
+  const use_case =
+    kind === "onboarding"
+      ? { type: "account_onboarding", account_onboarding: { configurations: ["recipient"], return_url: returnUrl, refresh_url: refreshUrl } }
+      : { type: "account_dashboard", account_dashboard: { refresh_url: refreshUrl } };
+  const link = await stripeV2<{ url: string }>("POST", "/core/account_links", { account: accountId, use_case });
+  return link.url;
+}
+
+/** The charge behind a player's payment: how much was charged, refunded, and what Stripe kept. */
+export async function chargeOf(paymentIntent: string) {
+  const pi = await stripe<{
+    latest_charge: { id: string; amount: number; amount_refunded: number; balance_transaction: { fee: number } | null } | null;
+  }>("GET", `/payment_intents/${encodeURIComponent(paymentIntent)}?expand[]=latest_charge.balance_transaction`);
+  const charge = pi.latest_charge;
+  if (!charge) throw new StripeError(`No charge on ${paymentIntent}`);
+  return { id: charge.id, amount: charge.amount, refunded: charge.amount_refunded, fee: charge.balance_transaction?.fee ?? null };
+}
+
+/** Sends part of a player's payment to the host. Tied to the charge so it can go out before the funds settle. */
+export function transferToHost(opts: { accountId: string; amountCents: number; chargeId: string; matchId: number; paymentId: number }) {
+  return stripe<{ id: string }>(
+    "POST",
+    "/transfers",
+    {
+      amount: opts.amountCents,
+      currency: "cad",
+      destination: opts.accountId,
+      source_transaction: opts.chargeId,
+      transfer_group: `match-${opts.matchId}`,
+      metadata: { match_id: opts.matchId, payment_id: opts.paymentId },
+    },
+    `host-payout-${opts.paymentId}`,
+  );
+}

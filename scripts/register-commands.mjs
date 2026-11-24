@@ -132,6 +132,12 @@ const commands = [
     dm_permission: false,
     options: [{ type: INTEGER, name: "match", description: "Match number", required: true, min_value: 1 }],
   },
+  {
+    name: "payouts",
+    description: "Set up where the money for games you host goes (your bank, through Stripe)",
+    default_member_permissions: ORGANIZER,
+    dm_permission: false,
+  },
 ];
 
 async function api(method, path, body) {

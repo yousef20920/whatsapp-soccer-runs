@@ -3,6 +3,7 @@ import { available, cancelPrompt, confirmMatch, dateAutocomplete, newGame, roste
 import { cancelGame, claim, leave, leaveConfirmed, pay, type Result } from "../lib/roster.js";
 import { startPoll, vote } from "../lib/polls.js";
 import { parseReserveButton, parseReserveCommand, reserve } from "../lib/reserve.js";
+import { payoutsCommand } from "../lib/payouts.js";
 import { botLog, discord, editReply, EPHEMERAL, followUpPrivately, InteractionType, isOrganizer, isValidSignature, json, playerOf, ResponseType, sendDirectMessage, type Interaction } from "../lib/discord.js";
 
 // Discord sends every slash command and button click here (the app's Interactions Endpoint URL).
@@ -42,6 +43,8 @@ export async function POST(request: Request): Promise<Response> {
           return json({ type: ResponseType.MESSAGE, data: { ...(await cancelPrompt(interaction)), allowed_mentions: { parse: [] } } });
         case "roster":
           return message(await roster(interaction));
+        case "payouts":
+          return message(await payoutsCommand(interaction));
         case "reserve":
           waitUntil(reserve(interaction, parseReserveCommand(interaction)).catch((err) => failLater(interaction, err)));
           return json({ type: ResponseType.DEFERRED_MESSAGE, data: { flags: EPHEMERAL } });
