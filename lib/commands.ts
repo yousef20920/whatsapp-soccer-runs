@@ -33,7 +33,7 @@ export async function newGame(interaction: Interaction): Promise<Reply> {
   if (kickoff.getTime() <= Date.now()) return privateReply("That kickoff time has already passed.");
 
   const fieldCostCents = Math.round(fieldCost * 100);
-  const { baseCents, checkoutCents } = priceFor(fieldCostCents, maxPlayers);
+  const { baseCents, checkoutCents, stripeCents, hostFeeCents } = priceFor(fieldCostCents, maxPlayers);
 
   const [match] = await sql<Match[]>`
     INSERT INTO matches (facility_name, court_name, kickoff_time, duration_minutes, max_players,
@@ -46,7 +46,7 @@ export async function newGame(interaction: Interaction): Promise<Reply> {
     [
       `📝 **Draft Match #${match.match_id}** created (players can't see it yet).`,
       `**${facility} · ${court}**, ${torontoLabel(kickoff)}, ${duration} min, ${maxPlayers} players`,
-      `Field ${money(fieldCostCents)} → ${money(baseCents)} each + card fee = **${money(checkoutCents)} per player**`,
+      `Field ${money(fieldCostCents)} → **${money(checkoutCents)} per player** (${money(baseCents)} field + ${money(stripeCents)} card fee + ${money(hostFeeCents)} host fee)`,
       `Once the field is booked, run \`/confirm match:${match.match_id}\` to post it in #games.`,
     ].join("\n"),
   );
@@ -169,7 +169,7 @@ export async function available(interaction: Interaction): Promise<void> {
   // One short card per start time, earliest first. Venue size and links go once in the description.
   const fieldLabel = { both: sizeLabel.toLowerCase(), indoor: `${sizeLabel.toLowerCase()} · indoor only`, outdoor: "full outdoor field · outdoor only" }[where];
   const header = `${format} · ${fieldLabel} · ${length} min · after ${shortTime(afterMinute)} EST · ${players} players`;
-  const note = "-# Price per player includes the card fee. Totals include HST. Resident rates. Only organizers can reserve.";
+  const note = "-# Totals include HST. Resident rates. Only organizers can reserve.";
   const card = ({ ymd, slot: s }: (typeof found)[number], i: number) => ({
     name: `${i + 1}. 📅 ${dayLabel(ymd).replace(",", "")} · 🕐 ${shortTime(s.start)}–${shortTime(s.start + length)} · 📍 ${s.venue.name} ${s.label}`,
     value: `💵 **${money(priceFor(s.cost.totalCents, players).checkoutCents)}/player** · ${money(s.cost.totalCents)} total · ${s.cost.rate} · [Book](${bookingLink(s.resourceIds[0])})`,

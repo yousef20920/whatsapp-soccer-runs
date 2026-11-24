@@ -104,7 +104,7 @@ export async function reserve(interaction: Interaction, request: ReserveRequest 
   }
 
   const cost = fieldCost(venue, ymd, startMinute, lengthMinutes, resourceIds.length);
-  const { baseCents, checkoutCents } = priceFor(cost.totalCents, players);
+  const { baseCents, checkoutCents, stripeCents, hostFeeCents } = priceFor(cost.totalCents, players);
   const labels = resourceIds.map((id) => venue.quarters.find((q) => q.id === id)!.label);
   const court = venue.outdoor ? `${labels.join("+")} (full outdoor field)` : `${size === "full" ? "Full field" : labels.join("+")} (${size})`;
 
@@ -122,6 +122,7 @@ export async function reserve(interaction: Interaction, request: ReserveRequest 
       `📝 **Draft Match #${match.match_id}** · not booked yet`,
       `📅 ${dayLabel(ymd)} · 🕐 ${shortTime(startMinute)}–${shortTime(end)} EST · 📍 ${venue.name} ${court}`,
       `💵 **${money(checkoutCents)}/player** · ${money(cost.totalCents)} total · ${cost.rate}`,
+      `-# Per player: ${money(baseCents)} field + ${money(stripeCents)} card fee + ${money(hostFeeCents)} host fee for you (${money(hostFeeCents * players)} if full). Players only see the price.`,
       `⚽ ${format} · ${players} players · 📏 ${dimensions(venue, size)}${venue.pitch.estimated ? " (est.)" : ""}`,
       ``,
       `**To book:**`,

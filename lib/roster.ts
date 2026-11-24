@@ -3,7 +3,7 @@ import type postgres from "postgres";
 import { sql, type Match, type Registration } from "./db.js";
 import { botLog, commandsChannelId, discord } from "./discord.js";
 import { lobbyMessage } from "./lobby.js";
-import { cancellationFeeCents, LEAVE_CUTOFF_HOURS, money } from "./pricing.js";
+import { cancellationFeeCents, feesFor, LEAVE_CUTOFF_HOURS, money } from "./pricing.js";
 import { createCheckout, expireCheckout, getCheckout, refund as stripeRefund, stripeEnabled, stripeTestMode, type CheckoutSession } from "./stripe.js";
 import { torontoLabel } from "./time.js";
 
@@ -146,7 +146,8 @@ async function recordStripePayment(tx: Tx, match: Match, userId: string, session
       WHERE match_id = ${match.match_id} AND discord_user_id = ${userId}`;
     fx.changed = true;
     fx.dms.push({ userId, content: receipt(match, amount), components: leaveButton(match) });
-    fx.logs.push(`💳 <@${userId}> paid ${money(amount)} for Match #${match.match_id} (Stripe${stripeTestMode() ? " test" : ""})`);
+    const { hostFeeCents } = feesFor(match.base_price_cents, match.checkout_price_cents);
+    fx.logs.push(`💳 <@${userId}> paid ${money(amount)} for Match #${match.match_id} (Stripe${stripeTestMode() ? " test" : ""}) · host fee ${money(hostFeeCents)} for <@${match.created_by}>`);
     return "confirmed";
   }
 
@@ -518,6 +519,7 @@ export async function rosterReport(matchId: number): Promise<string> {
   const gone = regs.filter((r) => r.status === "CANCELLED" && byUser.get(r.discord_user_id)?.paid);
   const totalIn = sums.reduce((s, m) => s + m.paid, 0);
   const totalOut = sums.reduce((s, m) => s + m.refunded, 0);
+  const { hostFeeCents: hostFee } = feesFor(match.base_price_cents, match.checkout_price_cents);
 
   return [
     `**Match #${matchId}** · ${title(match)} · ${torontoLabel(new Date(match.kickoff_time))} · ${match.status.toLowerCase()}`,
@@ -535,6 +537,7 @@ export async function rosterReport(matchId: number): Promise<string> {
     list(gone, (r) => `<@${r.discord_user_id}> · refunded ${money(byUser.get(r.discord_user_id)?.refunded ?? 0)}`),
     ``,
     `💵 Collected **${money(totalIn - totalOut)}** (${money(totalIn)} in, ${money(totalOut)} refunded) · field costs ${money(match.field_cost_cents)}`,
+    `🎩 Host fee for <@${match.created_by}>: **${money(hostFee * paid.length)}** (${money(hostFee)} × ${paid.length} paid)`,
     !stripeEnabled() ? "-# Test mode: no real money moved." : stripeTestMode() ? "-# Stripe test mode: no real money moved." : "",
   ].join("\n");
 }
