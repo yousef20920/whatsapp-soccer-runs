@@ -3,7 +3,7 @@ import { available, cancelPrompt, confirmMatch, dateAutocomplete, newGame, roste
 import { cancelGame, claim, leave, leaveConfirmed, pay, type Result } from "../lib/roster.js";
 import { startPoll, vote } from "../lib/polls.js";
 import { parseReserveButton, parseReserveCommand, reserve } from "../lib/reserve.js";
-import { payoutsCommand } from "../lib/payouts.js";
+import { approvePayout, payoutsCommand } from "../lib/payouts.js";
 import { botLog, discord, editReply, EPHEMERAL, followUpPrivately, InteractionType, isOrganizer, isValidSignature, json, playerOf, ResponseType, sendDirectMessage, type Interaction } from "../lib/discord.js";
 
 // Discord sends every slash command and button click here (the app's Interactions Endpoint URL).
@@ -44,7 +44,9 @@ export async function POST(request: Request): Promise<Response> {
         case "roster":
           return message(await roster(interaction));
         case "payouts":
-          return message(await payoutsCommand(interaction));
+          // Creating the host's Stripe account can take longer than Discord's 3-second window.
+          waitUntil(payoutsCommand(interaction).then(({ content }) => editReply(interaction, { content })).catch((err) => failLater(interaction, err)));
+          return json({ type: ResponseType.DEFERRED_MESSAGE, data: { flags: EPHEMERAL } });
         case "reserve":
           waitUntil(reserve(interaction, parseReserveCommand(interaction)).catch((err) => failLater(interaction, err)));
           return json({ type: ResponseType.DEFERRED_MESSAGE, data: { flags: EPHEMERAL } });
@@ -76,6 +78,23 @@ function gameButton(interaction: Interaction): Response {
   if (action === "agree-rules") return agreeToRules(interaction);
   if (action === "poll-in" || action === "poll-out") {
     waitUntil(vote(interaction, Number(id), action === "poll-in" ? "IN" : "OUT").catch((err) => console.error("Vote failed", err)));
+    return json({ type: ResponseType.DEFERRED_UPDATE });
+  }
+  if (action === "payout-ok") {
+    waitUntil(
+      approvePayout(interaction, Number(id))
+        .then(async (r) => {
+          if ("denied" in r) return void (await followUpPrivately(interaction, r.denied));
+          const original = (interaction as Interaction & { message?: { content?: string } }).message?.content ?? "";
+          await editReply(interaction, { content: `${original.replace("-# Only the server owner can approve.", "").trimEnd()}\n${r.approved}`, components: [], allowed_mentions: { parse: [] } });
+        })
+        .catch(async (err) => {
+          // Keep the approval request in place (failLater would overwrite it) and say so privately.
+          console.error(err);
+          await botLog(`⚠️ Approving the payout for Match #${id} failed: ${String((err as Error)?.message ?? err).slice(0, 300)}`);
+          await followUpPrivately(interaction, "⚠️ Something went wrong. Please try again in a minute.").catch(console.error);
+        }),
+    );
     return json({ type: ResponseType.DEFERRED_UPDATE });
   }
   if (action === "cancel-yes" || action === "cancel-no") {

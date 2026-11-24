@@ -136,6 +136,9 @@ const commands = [
     name: "payouts",
     description: "Set up where the money for games you host goes (your bank, through Stripe)",
     default_member_permissions: ORGANIZER,
+    options: [
+      { type: 3, name: "email", description: "Your email, for Stripe (only needed the first time)", required: false, max_length: 254 },
+    ],
     dm_permission: false,
   },
 ];

@@ -117,9 +117,10 @@ interface HostAccount {
 }
 
 /** A new connected account for a host. Stripe's own onboarding collects their ID and bank. */
-export function createHostAccount(displayName: string, discordUserId: string) {
+export function createHostAccount(displayName: string, email: string, discordUserId: string) {
   return stripeV2<HostAccount>("POST", "/core/accounts", {
     display_name: displayName.slice(0, 100),
+    contact_email: email,
     dashboard: "express",
     identity: { country: "ca" },
     defaults: { responsibilities: { fees_collector: "application", losses_collector: "application" } },
@@ -139,7 +140,7 @@ export async function hostCanReceive(accountId: string): Promise<boolean> {
 export async function hostAccountLink(accountId: string, kind: "onboarding" | "dashboard", returnUrl: string, refreshUrl: string): Promise<string> {
   const use_case =
     kind === "onboarding"
-      ? { type: "account_onboarding", account_onboarding: { configurations: ["recipient"], return_url: returnUrl, refresh_url: refreshUrl } }
+      ? { type: "account_onboarding", account_onboarding: { return_url: returnUrl, refresh_url: refreshUrl } }
       : { type: "account_dashboard", account_dashboard: { refresh_url: refreshUrl } };
   const link = await stripeV2<{ url: string }>("POST", "/core/account_links", { account: accountId, use_case });
   return link.url;

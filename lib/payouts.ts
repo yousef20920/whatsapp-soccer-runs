@@ -1,12 +1,13 @@
 import { createHmac, timingSafeEqual } from "node:crypto";
 import { sql } from "./db.js";
-import { botLog, displayName, EPHEMERAL, isOrganizer, sendDirectMessage, type Interaction } from "./discord.js";
+import { botLog, discord, displayName, EPHEMERAL, isOrganizer, option, playerOf, sendDirectMessage, type Interaction } from "./discord.js";
 import { money } from "./pricing.js";
 import { chargeOf, createHostAccount, hostAccountLink, hostCanReceive, SITE_URL, stripeEnabled, stripeTestMode, transferToHost } from "./stripe.js";
 
 // Host payouts: the organizer who reserves a game is its host. Players pay the club through Stripe, and once
-// the game kicks off SORY sends each paid spot (minus Stripe's fee) to the host's own Stripe account, which
-// pays out to their bank. Hosts set that up once with /payouts.
+// the game kicks off SORY asks the server owner to approve the payout in #bot-logs. Once approved, it sends
+// each paid spot (minus Stripe's fee) to the host's own Stripe account, which pays out to their bank.
+// Hosts set that up once with /payouts.
 
 const LINK_HOURS = 24;
 
@@ -41,7 +42,10 @@ export async function payoutsCommand(interaction: Interaction) {
   const userId = interaction.member!.user.id;
   let accountId = await hostAccountOf(userId);
   if (!accountId) {
-    accountId = (await createHostAccount(displayName(interaction), userId)).id;
+    const email = option<string>(interaction, "email")?.trim();
+    if (!email) return reply("💸 To get paid for the games you host, run `/payouts` again with your email, e.g. `/payouts email:you@example.com`. Stripe uses it to reach you about payouts.");
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return reply("That email doesn't look right. Try `/payouts email:you@example.com`.");
+    accountId = (await createHostAccount(displayName(interaction), email, userId)).id;
     await sql`INSERT INTO hosts (discord_user_id, stripe_account_id) VALUES (${userId}, ${accountId}) ON CONFLICT DO NOTHING`;
     accountId = (await hostAccountOf(userId))!; // someone double-clicked: keep the first account
   }
@@ -76,15 +80,18 @@ export async function hostReady(discordUserId: string): Promise<boolean> {
  * Runs in the once-a-minute sweep: for games that have kicked off, sends each paid spot to the host.
  * A spot is sent once (Stripe idempotency plus a host_payouts row). Spots whose payment was refunded
  * (the player left, or paid twice) send nothing: the club keeps only what covers Stripe's fee.
- * Hosts who haven't finished /payouts are skipped and caught up once they have.
+ * Only games the server owner approved are paid (see requestApprovals). Hosts who haven't finished
+ * /payouts are skipped and caught up once they have.
  */
 export async function sendHostPayouts(): Promise<number> {
   if (!stripeEnabled()) return 0;
+  await requestApprovals().catch((err) => console.error("Couldn't ask for payout approval", err));
   const due = await sql<{ payment_id: number; match_id: number; reference: string; host_id: string; stripe_account_id: string }[]>`
     SELECT p.id AS payment_id, p.match_id, p.reference, m.created_by AS host_id, h.stripe_account_id
     FROM payments p
     JOIN matches m ON m.match_id = p.match_id
     JOIN hosts h ON h.discord_user_id = m.created_by
+    JOIN payout_approvals pa ON pa.match_id = p.match_id AND pa.approved_at IS NOT NULL
     JOIN registrations r ON r.match_id = p.match_id AND r.discord_user_id = p.discord_user_id
     WHERE p.kind = 'PAYMENT' AND p.provider = 'STRIPE' AND r.status = 'CONFIRMED'
       AND m.status <> 'CANCELLED' AND m.kickoff_time <= ${new Date()}
@@ -128,12 +135,73 @@ export async function sendHostPayouts(): Promise<number> {
   return [...sent.values()].reduce((n, s) => n + s.spots, 0);
 }
 
+// ---- Owner approval ----
+
+/**
+ * For each game that has kicked off with paid spots, posts one approval request in #bot-logs with an
+ * Approve button. Only the Discord server owner can press it (approvePayout checks).
+ */
+async function requestApprovals(): Promise<void> {
+  const channelId = process.env.BOT_LOGS_CHANNEL_ID;
+  if (!channelId) return;
+  const games = await sql<{ match_id: number; host_id: string; facility_name: string; court_name: string; kickoff_time: Date; spots: number; cents: number; host_ready: boolean }[]>`
+    SELECT m.match_id, m.created_by AS host_id, m.facility_name, m.court_name, m.kickoff_time,
+           count(*)::int AS spots, coalesce(sum(p.amount_cents), 0)::int AS cents, bool_or(h.discord_user_id IS NOT NULL) AS host_ready
+    FROM payments p
+    JOIN matches m ON m.match_id = p.match_id
+    JOIN registrations r ON r.match_id = p.match_id AND r.discord_user_id = p.discord_user_id
+    LEFT JOIN hosts h ON h.discord_user_id = m.created_by
+    WHERE p.kind = 'PAYMENT' AND p.provider = 'STRIPE' AND r.status = 'CONFIRMED'
+      AND m.status <> 'CANCELLED' AND m.kickoff_time <= ${new Date()}
+      AND NOT EXISTS (SELECT 1 FROM payout_approvals pa WHERE pa.match_id = m.match_id)
+    GROUP BY m.match_id
+    ORDER BY m.match_id
+    LIMIT 10`;
+  for (const g of games) {
+    const [claimed] = await sql`INSERT INTO payout_approvals (match_id) VALUES (${g.match_id}) ON CONFLICT DO NOTHING RETURNING match_id`;
+    if (!claimed) continue; // another sweep got here first
+    const test = stripeTestMode() ? " (Stripe test)" : "";
+    const posted = await discord<{ id: string }>("POST", `/channels/${channelId}/messages`, {
+      content: [
+        `💸 **Approve payout for Match #${g.match_id}?**${test}`,
+        `Host: <@${g.host_id}> · ${g.facility_name} ${g.court_name} · ${g.kickoff_time.toLocaleString("en-CA", { timeZone: "America/Toronto", dateStyle: "medium", timeStyle: "short" })}`,
+        `${g.spots} paid spot${g.spots === 1 ? "" : "s"} · ${money(g.cents)} paid by players. The host gets that minus card fees.`,
+        ...(g.host_ready ? [] : [`-# <@${g.host_id}> hasn't set up payouts yet. Once approved, the money is sent when they do.`]),
+        `-# Only the server owner can approve.`,
+      ].join("\n"),
+      components: [{ type: 1, components: [{ type: 2, style: 3, label: "Approve payout", custom_id: `payout-ok:${g.match_id}` }] }],
+      allowed_mentions: { parse: [] },
+    });
+    await sql`UPDATE payout_approvals SET message_id = ${posted.id} WHERE match_id = ${g.match_id}`;
+  }
+}
+
+let ownerId: string | undefined;
+async function serverOwner(guildId: string): Promise<string> {
+  ownerId ??= (await discord<{ owner_id: string }>("GET", `/guilds/${guildId}`)).owner_id;
+  return ownerId;
+}
+
+/** The Approve button in #bot-logs. Returns the updated request text, or a private note for anyone else. */
+export async function approvePayout(interaction: Interaction, matchId: number): Promise<{ approved: string } | { denied: string }> {
+  const who = playerOf(interaction).id;
+  if (!interaction.guild_id || who !== (await serverOwner(interaction.guild_id))) return { denied: "Only the server owner can approve payouts." };
+  const [row] = await sql<{ approved_by: string }[]>`
+    UPDATE payout_approvals SET approved_by = ${who}, approved_at = now()
+    WHERE match_id = ${matchId} AND approved_at IS NULL RETURNING approved_by`;
+  if (!row) return { denied: "That payout was already approved." };
+  const sent = await sendHostPayouts();
+  return { approved: `✅ Approved by <@${who}>.${sent ? ` Sent ${sent} paid spot${sent === 1 ? "" : "s"} to the host.` : " It goes out as soon as the host's payouts are set up."}` };
+}
+
 /** For /roster: what's been sent to the host so far, or why not. */
 export async function payoutLine(matchId: number, hostId: string, kickoff: Date, paidSpots: number): Promise<string> {
   if (!stripeEnabled() || !paidSpots) return "";
   const [row] = await sql<{ cents: number; spots: number }[]>`
     SELECT coalesce(sum(amount_cents), 0)::int AS cents, count(transfer_id)::int AS spots FROM host_payouts WHERE match_id = ${matchId}`;
   if (row.spots) return `💸 Sent to <@${hostId}>: **${money(row.cents)}** for ${row.spots} paid spot${row.spots === 1 ? "" : "s"}`;
+  const [approval] = await sql<{ approved_at: Date | null }[]>`SELECT approved_at FROM payout_approvals WHERE match_id = ${matchId}`;
+  if (kickoff.getTime() <= Date.now() && !approval?.approved_at) return `💸 Waiting for the server owner to approve the payout to <@${hostId}> in #bot-logs.`;
   if (!(await hostReady(hostId))) return `💸 <@${hostId}> hasn't set up payouts yet (\`/payouts\`). The money waits until they do.`;
-  return kickoff.getTime() > Date.now() ? `💸 Paid spots go to <@${hostId}> at kickoff.` : `💸 Sending to <@${hostId}> now.`;
+  return kickoff.getTime() > Date.now() ? `💸 Paid spots go to <@${hostId}> after kickoff, once the server owner approves.` : `💸 Sending to <@${hostId}> now.`;
 }
