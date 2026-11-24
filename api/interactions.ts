@@ -4,6 +4,7 @@ import { cancelGame, claim, leave, leaveConfirmed, pay, type Result } from "../l
 import { startPoll, vote } from "../lib/polls.js";
 import { parseReserveButton, parseReserveCommand, reserve } from "../lib/reserve.js";
 import { approvePayout, payoutsCommand } from "../lib/payouts.js";
+import { tooFast } from "../lib/ratelimit.js";
 import { botLog, discord, editReply, EPHEMERAL, followUpPrivately, InteractionType, isOrganizer, isValidSignature, json, playerOf, ResponseType, sendDirectMessage, type Interaction } from "../lib/discord.js";
 
 // Discord sends every slash command and button click here (the app's Interactions Endpoint URL).
@@ -20,6 +21,11 @@ export async function POST(request: Request): Promise<Response> {
     // Typing in a date box: suggest bookable days.
     if (interaction.type === InteractionType.AUTOCOMPLETE) {
       return json({ type: ResponseType.AUTOCOMPLETE_RESULT, data: { choices: dateAutocomplete(interaction) } });
+    }
+
+    // Cooldown: one account can't flood commands or buttons.
+    if (await tooFast(playerOf(interaction).id)) {
+      return message({ content: "⏳ Slow down a little. Try again in a few seconds.", flags: EPHEMERAL });
     }
 
     if (interaction.type === InteractionType.APPLICATION_COMMAND) {
