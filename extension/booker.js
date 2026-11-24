@@ -3,8 +3,8 @@
 // A SORY link looks like .../reservation/landing/search/detail/1192#sory=<base64url JSON>, with
 // { ids: [1192, 1197], ymd: "2026-11-22", start: "11:00 PM", end: "11:59 PM", attendees: 18, name: "..." }.
 // For each field it sets the attendees, date and time and presses Proceed, then fills in the event
-// details and the purpose/music questions. It never agrees to waivers, signs, adds to cart or pays:
-// the organizer does those.
+// details, the 2 "I acknowledge" field-rules questions and the purpose/music questions. It never ticks
+// the waivers, signs, adds to cart or pays: the organizer does those.
 (() => {
   const KEY = "sory-plan";
   const BASE = "/activemississauga/reservation/landing/search";
@@ -214,16 +214,19 @@
       return;
     }
 
+    // The 2 "I acknowledge" questions (field-use rules) only offer Yes.
+    await choose(dropdownFor("only permitted to use the field"), (t) => t === "Yes");
+    await choose(dropdownFor("move or alter the location"), (t) => t === "Yes");
     await choose(dropdownFor("purpose of your rental"), (t) => t === "Soccer");
     await choose(dropdownFor("playing music"), (t) => t === "No");
     finish();
     const total = (document.body.innerText.match(/Total\s*\$([\d,.]+)/) || [])[1];
     banner(
-      `✅ Filled in${total ? ` · total <b>$${total}</b>` : ""}. Now it's your turn: answer the 2 <b>"I acknowledge"</b> questions, ` +
-        `tick the 2 waivers, sign, then <b>Add to cart</b> and pay.`,
+      `✅ Filled in${total ? ` · total <b>$${total}</b>` : ""}. Now it's your turn: tick the 2 <b>waivers</b>, sign, ` +
+        `then <b>Add to cart</b> and pay.`,
       "done",
     );
-    dropdownFor("I acknowledge")?.scrollIntoView({ behavior: "smooth", block: "center" });
+    document.querySelector('input[type="checkbox"]')?.scrollIntoView({ behavior: "smooth", block: "center" });
   }
 
   // ----- main loop: the site is a single-page app, so watch for page changes -----

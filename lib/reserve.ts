@@ -19,7 +19,7 @@ export const BOOKER_INSTALL_URL = "https://sory-five.vercel.app/booker/";
 
 /**
  * Link that opens Active Mississauga and lets the SORY Booker extension fill in the whole booking
- * (every quarter field, date, times, attendees, event details) up to the waivers, signature and payment.
+ * (every quarter field, date, times, attendees, event details, custom questions) up to the waivers, signature and payment.
  */
 export function autofillLink(r: { resourceIds: number[]; ymd: string; startMinute: number; lengthMinutes: number; players: number; matchId: number }) {
   const end = r.startMinute + r.lengthMinutes;
@@ -123,7 +123,7 @@ export async function reserve(interaction: Interaction, request: ReserveRequest 
       ``,
       `**To book:**`,
       `1️⃣ **[🤖 Open the booking, filled in](${autofill})** on a computer`,
-      `   Then answer the 2 "I acknowledge" questions, tick the waivers, sign, Add to cart and pay.`,
+      `   Then tick the 2 waivers, sign, Add to cart and pay.`,
       `-# Needs the [SORY Booker extension](${BOOKER_INSTALL_URL}) (one-time install). Without it, book by hand: ${bookLinks}`,
       `2️⃣ Then run \`/confirm match:${match.match_id}\` to post it in #games`,
       `-# Anyone can still book this slot until you do, so book soon.`,
