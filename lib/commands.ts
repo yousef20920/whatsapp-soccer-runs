@@ -169,10 +169,10 @@ export async function available(interaction: Interaction): Promise<void> {
   // One short card per start time, earliest first. Venue size and links go once in the description.
   const fieldLabel = { both: sizeLabel.toLowerCase(), indoor: `${sizeLabel.toLowerCase()} · indoor only`, outdoor: "full outdoor field · outdoor only" }[where];
   const header = `${format} · ${fieldLabel} · ${length} min · after ${shortTime(afterMinute)} EST · ${players} players`;
-  const note = "-# Totals include HST. Resident rates. Only organizers can reserve.";
+  const note = "-# Prices are per player and include HST. Only organizers can reserve.";
   const card = ({ ymd, slot: s }: (typeof found)[number], i: number) => ({
     name: `${i + 1}. 📅 ${dayLabel(ymd).replace(",", "")} · 🕐 ${shortTime(s.start)}–${shortTime(s.start + length)} · 📍 ${s.venue.name} ${s.label}`,
-    value: `💵 **${money(priceFor(s.cost.totalCents, players).checkoutCents)}/player** · ${money(s.cost.totalCents)} total · ${s.cost.rate} · [Book](${bookingLink(s.resourceIds[0])})`,
+    value: `💵 **${money(priceFor(s.cost.totalCents, players).checkoutCents)}/player** · ${s.cost.rate} · [Book](${bookingLink(s.resourceIds[0])})`,
   });
   const venueLine = (v: (typeof found)[number]["slot"]["venue"]) =>
     `📍 **${v.name}** · ${dimensions(v, size)}${v.pitch.estimated ? " (est.)" : ""} · ${v.links.map((l) => `[${l.label}](${l.url})`).join(" · ")}`;

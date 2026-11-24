@@ -6,7 +6,8 @@
 <title>NASORY Runs · Pickup soccer</title>
 <meta name="description" content="Pickup soccer, made easy. Find a game, grab a spot, play.">
 <meta name="theme-color" content="#000000">
-<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'><rect width='64' height='64' rx='14' fill='%23000'/><circle cx='32' cy='32' r='17' fill='none' stroke='%2330d158' stroke-width='5'/><circle cx='32' cy='32' r='5' fill='%2330d158'/></svg>">
+<link rel="icon" type="image/svg+xml" href="/logo.svg">
+<link rel="apple-touch-icon" href="/apple-touch-icon.png">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
@@ -40,6 +41,8 @@
   }
   nav .wrap { height: 100%; display: flex; align-items: center; justify-content: space-between; }
   nav .brand { font-weight: 700; font-size: 15px; text-decoration: none; letter-spacing: -0.02em; }
+  nav .brand { display: flex; align-items: center; gap: 9px; }
+  nav .logo { width: 24px; height: 24px; box-shadow: 0 0 0 1px rgba(255,255,255,.14); border-radius: 6px; }
   nav .links { display: flex; gap: 26px; }
   nav .links a { text-decoration: none; opacity: .8; transition: opacity .2s; }
   nav .links a:hover { opacity: 1; }
@@ -137,7 +140,7 @@
 
 <nav>
   <div class="wrap">
-    <a class="brand" href="#">NASORY Runs</a>
+    <a class="brand" href="#"><svg class="logo" viewBox="0 0 64 64" aria-hidden="true"><rect width="64" height="64" rx="15" fill="#000"/><path d="M19 46V18l26 28V31" fill="none" stroke="#30d158" stroke-width="7" stroke-linecap="round" stroke-linejoin="round"/><circle cx="45" cy="19.5" r="5.5" fill="#fff"/></svg>NASORY Runs</a>
     <div class="links">
       <a href="#how">How it works</a>
       <a href="#why">Why us</a>
