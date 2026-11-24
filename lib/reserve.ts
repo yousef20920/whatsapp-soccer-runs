@@ -16,6 +16,8 @@ export interface ReserveRequest {
 
 const MIN_NOTICE_MS = 24 * 60 * 60 * 1000;
 export const BOOKER_INSTALL_URL = "https://sory-five.vercel.app/booker/";
+/** The SORY Booker version Reserve links need. Older copies show an "Update SORY Booker" banner (from 1.0.3 on). */
+export const BOOKER_VERSION = "1.0.3";
 
 /**
  * Link that opens Active Mississauga and lets the SORY Booker extension fill in the whole booking
@@ -30,6 +32,7 @@ export function autofillLink(r: { resourceIds: number[]; ymd: string; startMinut
     end: end >= 24 * 60 ? "11:59 PM" : minuteLabel(end), // the City's form ends a day at 11:59 PM
     attendees: Math.min(Math.max(r.players, 5), 50),
     name: `NASORY Runs · Match #${r.matchId}`,
+    v: BOOKER_VERSION,
   };
   return `${bookingLink(r.resourceIds[0])}#sory=${Buffer.from(JSON.stringify(plan)).toString("base64url")}`;
 }
@@ -124,7 +127,7 @@ export async function reserve(interaction: Interaction, request: ReserveRequest 
       `**To book:**`,
       `1️⃣ **[🤖 Open the booking, filled in](${autofill})** on a computer`,
       `   Then tick the 2 waivers, sign, Add to cart and pay.`,
-      `-# Needs the [SORY Booker extension](${BOOKER_INSTALL_URL}) (one-time install). Without it, book by hand: ${bookLinks}`,
+      `-# Needs the [SORY Booker extension](${BOOKER_INSTALL_URL}) ${BOOKER_VERSION} or later. Without it, book by hand: ${bookLinks}`,
       `2️⃣ Then run \`/confirm match:${match.match_id}\` to post it in #games`,
       `-# Anyone can still book this slot until you do, so book soon.`,
     ].join("\n"),

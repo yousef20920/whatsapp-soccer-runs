@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "SORY Booker",
-  "version": "1.0.2",
+  "version": "1.0.3",
   "description": "Fills in Active Mississauga field bookings from SORY's Reserve links. You still agree to the waivers, sign and pay yourself.",
   "content_scripts": [
     {

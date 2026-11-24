@@ -6,6 +6,8 @@
 // details, the 2 "I acknowledge" field-rules questions and the purpose/music questions. It never ticks
 // the waivers, signs, adds to cart or pays: the organizer does those.
 (() => {
+  const VERSION = "1.0.3"; // keep in step with manifest.json and BOOKER_VERSION in lib/reserve.ts
+  const INSTALL_URL = "https://sory-five.vercel.app/booker/";
   const KEY = "sory-plan";
   const BASE = "/activemississauga/reservation/landing/search";
   const MAX_AGE_MS = 30 * 60 * 1000;
@@ -35,13 +37,24 @@
   const save = (plan) => sessionStorage.setItem(KEY, JSON.stringify(plan));
   const finish = () => sessionStorage.removeItem(KEY);
 
+  // True when version a ("1.0.3") is newer than version b.
+  const newer = (a, b) => {
+    const [x, y] = [a, b].map((v) => String(v).split(".").map(Number));
+    for (let i = 0; i < Math.max(x.length, y.length); i++) if ((x[i] || 0) !== (y[i] || 0)) return (x[i] || 0) > (y[i] || 0);
+    return false;
+  };
+  let outdated = null;
+
   function readLink() {
     const m = location.hash.match(/sory=([A-Za-z0-9_-]+)/);
     if (!m) return;
     try {
       const json = atob(m[1].replace(/-/g, "+").replace(/_/g, "/"));
       const p = JSON.parse(decodeURIComponent(escape(json)));
-      if (Array.isArray(p.ids) && p.ids.length && p.ymd && p.start && p.end) save({ ...p, next: 0, created: Date.now() });
+      if (p.v && newer(p.v, VERSION)) {
+        sessionStorage.removeItem(KEY);
+        outdated = p.v; // shown once the page has a body
+      } else if (Array.isArray(p.ids) && p.ids.length && p.ymd && p.start && p.end) save({ ...p, next: 0, created: Date.now() });
     } catch (err) {
       console.error("SORY Booker: unreadable link", err);
     }
@@ -268,6 +281,15 @@
   // Runs at document_start: the site's router drops the #sory=… part as it loads, so read it first.
   readLink();
   const start = () => {
+    if (outdated) {
+      // The link was made for a newer SORY Booker: stop rather than fill the booking the old way.
+      return banner(
+        `⚠️ Update SORY Booker: you have ${VERSION}, this link needs ${outdated} or later. ` +
+          `Download the new version, reload it in chrome://extensions, then open the link again.`,
+        "error",
+        { label: "Get the update", onClick: () => window.open(INSTALL_URL, "_blank") },
+      );
+    }
     setInterval(tick, 800);
     tick();
   };
