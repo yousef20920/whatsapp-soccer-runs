@@ -118,6 +118,24 @@ export function deleteReply(interaction: Interaction) {
 /** Where SORY's commands run and polls go. #games only holds the current game card. */
 export const commandsChannelId = () => process.env.COMMANDS_CHANNEL_ID || env("GAMES_CHANNEL_ID");
 
+/**
+ * Keeps #plan-a-run commands-only. The channel already blocks typing, but Discord lets admins and the
+ * server owner past any channel lock, so the once-a-minute sweep deletes anything not posted by SORY.
+ * Returns how many messages were removed.
+ */
+export async function clearTypedMessages(): Promise<number> {
+  const channelId = process.env.COMMANDS_CHANNEL_ID;
+  if (!channelId) return 0; // without its own channel, commands share #games: leave it alone
+  const recent = await discord<{ id: string; author: { bot?: boolean } }[]>("GET", `/channels/${channelId}/messages?limit=50`);
+  let removed = 0;
+  for (const message of recent.filter((m) => !m.author.bot)) {
+    await discord("DELETE", `/channels/${channelId}/messages/${message.id}`)
+      .then(() => removed++)
+      .catch((err) => console.error(`Couldn't delete message ${message.id}`, err));
+  }
+  return removed;
+}
+
 /** Posts one line to #bot-logs. Never throws: logging must not break what it records. */
 export async function botLog(text: string): Promise<void> {
   const channelId = process.env.BOT_LOGS_CHANNEL_ID;
