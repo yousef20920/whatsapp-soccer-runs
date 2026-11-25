@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import { sql, type Match } from "./db.js";
-import { botLog, deleteReply, discord, displayName, editReply, EPHEMERAL, env, isOrganizer, option, type Interaction } from "./discord.js";
+import { botLog, canRunGame, commandsChannelId, deleteReply, discord, displayName, editReply, EPHEMERAL, env, isHost, isOrganizer, option, type Interaction } from "./discord.js";
 import { lobbyMessage } from "./lobby.js";
 import { cancelPreview, rosterOf, rosterReport } from "./roster.js";
 import { invitePollVoters, pollForDay } from "./polls.js";
@@ -55,11 +55,12 @@ export async function newGame(interaction: Interaction): Promise<Reply> {
 /** /confirm: DRAFT -> OPEN and posts the Match Lobby in #games. Runs after a deferred reply. */
 export async function confirmMatch(interaction: Interaction): Promise<void> {
   const reply = (content: string) => editReply(interaction, { content });
-  if (!isOrganizer(interaction)) return void (await reply("Only organizers can confirm games."));
+  if (!isHost(interaction)) return void (await reply("Only hosts and organizers can confirm games."));
 
   const matchId = option<number>(interaction, "match")!;
   const [match] = await sql<Match[]>`SELECT * FROM matches WHERE match_id = ${matchId}`;
   if (!match) return void (await reply(`There's no Match #${matchId}.`));
+  if (!canRunGame(interaction, match.created_by)) return void (await reply(`Match #${matchId} isn't yours. Only <@${match.created_by}>, who reserved it, or an organizer can confirm it.`));
   if (match.status !== "DRAFT") return void (await reply(`Match #${matchId} is already ${match.status.toLowerCase()}.`));
   if (new Date(match.kickoff_time).getTime() <= Date.now()) return void (await reply(`Match #${matchId} has already started.`));
 
@@ -84,7 +85,7 @@ export async function confirmMatch(interaction: Interaction): Promise<void> {
       ? `\n🗳️ Told ${total === 1 ? "the 1 poll voter" : `the ${total} poll voters`} who said I'm in (${dmed} by DM${dmed < total ? `, ${total - dmed} mentioned in the channel` : ""}).`
       : `\n🗳️ Closed the poll for that day (no one had said I'm in).`;
   }
-  // #games only shows the newest game: remove SORY's older posts there.
+  // #games only shows the newest game: remove NasorAI's older posts there.
   const stillOpen = await clearGamesChannel(channelId, message.id, interaction.application_id);
   if (stillOpen.length) {
     note += `\n-# Older open game${stillOpen.length === 1 ? "" : "s"} ${stillOpen.map((n) => `#${n}`).join(", ")} left #games. Their paid players can still leave from their receipt DM.`;
@@ -96,7 +97,7 @@ export async function confirmMatch(interaction: Interaction): Promise<void> {
 }
 
 /**
- * Deletes SORY's posts in #games except the new game card (older cards, old lists, mentions), and
+ * Deletes NasorAI's posts in #games except the new game card (older cards, old lists, mentions), and
  * forgets the deleted cards. Returns the numbers of games that are still open but no longer shown.
  */
 async function clearGamesChannel(channelId: string, keepId: string, botId: string): Promise<number[]> {
@@ -169,7 +170,7 @@ export async function available(interaction: Interaction): Promise<void> {
   // One short card per start time, earliest first. Venue size and links go once in the description.
   const fieldLabel = { both: sizeLabel.toLowerCase(), indoor: `${sizeLabel.toLowerCase()} · indoor only`, outdoor: "full outdoor field · outdoor only" }[where];
   const header = `${format} · ${fieldLabel} · ${length} min · after ${shortTime(afterMinute)} EST · ${players} players`;
-  const note = "-# Prices are per player and include HST. Only organizers can reserve.";
+  const note = "-# Prices are per player and include HST. Only hosts and organizers can reserve.";
   const card = ({ ymd, slot: s }: (typeof found)[number], i: number) => ({
     name: `${i + 1}. 📅 ${dayLabel(ymd).replace(",", "")} · 🕐 ${shortTime(s.start)}–${shortTime(s.start + length)} · 📍 ${s.venue.name} ${s.label}`,
     value: `💵 **${money(priceFor(s.cost.totalCents, players).checkoutCents)}/player** · ${s.cost.rate} · [Book](${bookingLink(s.resourceIds[0])})`,
@@ -234,9 +235,13 @@ export async function available(interaction: Interaction): Promise<void> {
   await postOnce(interaction, searchKey, resultsHash, list, reply);
 }
 
-/** Posts `list` in the channel unless the same search with the same results is already there. */
+/**
+ * Posts `list` in #plan-a-run (or #organizers, when an organizer searches there) unless the same search with the
+ * same results is already there. Searches from any other channel land in #plan-a-run, so #general stays chat.
+ */
 async function postOnce(interaction: Interaction, searchKey: string, resultsHash: string, list: object, reply: (body: object) => Promise<unknown>) {
-  const channelId = interaction.channel_id!;
+  const here = interaction.channel_id!;
+  const channelId = here === process.env.ORGANIZERS_CHANNEL_ID ? here : commandsChannelId();
   const [last] = await sql<{ results_hash: string; message_id: string }[]>`
     SELECT results_hash, message_id FROM posted_lists WHERE channel_id = ${channelId} AND search_key = ${searchKey}`;
   if (last?.results_hash === resultsHash && (await messageExists(channelId, last.message_id))) {
@@ -257,6 +262,9 @@ async function postOnce(interaction: Interaction, searchKey: string, resultsHash
     VALUES (${channelId}, ${searchKey}, ${resultsHash}, ${message.id}, now())
     ON CONFLICT (channel_id, search_key) DO UPDATE
       SET results_hash = EXCLUDED.results_hash, message_id = EXCLUDED.message_id, posted_at = EXCLUDED.posted_at`;
+  if (channelId !== here) {
+    return void (await reply({ content: `✅ Posted in <#${channelId}>: https://discord.com/channels/${interaction.guild_id}/${channelId}/${message.id}` }));
+  }
   await deleteReply(interaction).catch(() => reply({ content: "✅ Posted." }));
 }
 
@@ -295,14 +303,15 @@ function chunk<T>(items: T[], size: number): T[][] {
   return Array.from({ length: Math.ceil(items.length / size) }, (_, i) => items.slice(i * size, i * size + size));
 }
 
-/** /cancel: asks the organizer to confirm, showing who gets refunded. Organizers only. */
+/** /cancel: asks to confirm, showing who gets refunded. Organizers, or the host who reserved the game. */
 export async function cancelPrompt(interaction: Interaction): Promise<Reply & { components?: unknown[] }> {
-  if (!isOrganizer(interaction)) return privateReply("Only organizers can cancel games.");
+  if (!isHost(interaction)) return privateReply("Only hosts and organizers can cancel games.");
   const matchId = option<number>(interaction, "match")!;
   const reason = (option<string>(interaction, "reason") ?? "").trim().replace(/\s+/g, " ").slice(0, 80);
   const preview = await cancelPreview(matchId);
   if (!preview) return privateReply(`There's no Match #${matchId}.`);
   const { match, paidPlayers, refundCents, others } = preview;
+  if (!canRunGame(interaction, match.created_by)) return privateReply(`Match #${matchId} isn't yours. Only <@${match.created_by}>, who reserved it, or an organizer can cancel it.`);
   if (match.status === "CANCELLED") return privateReply(`Match #${matchId} is already cancelled.`);
   if (match.status === "LOCKED" || new Date(match.kickoff_time).getTime() <= Date.now()) {
     return privateReply(`Match #${matchId} has already started, so it can't be cancelled.`);
@@ -330,10 +339,19 @@ export async function cancelPrompt(interaction: Interaction): Promise<Reply & { 
   };
 }
 
-/** /roster: the full roster with payments, privately. Organizers only. */
+/** /roster: the full roster with payments, privately. Organizers, or the host who reserved the game. */
 export async function roster(interaction: Interaction): Promise<Reply> {
-  if (!isOrganizer(interaction)) return privateReply("Only organizers can see the full roster.");
-  return privateReply(await rosterReport(option<number>(interaction, "match")!));
+  if (!isHost(interaction)) return privateReply("Only hosts and organizers can see the full roster.");
+  const matchId = option<number>(interaction, "match")!;
+  if (!(await mayRunGame(interaction, matchId))) return privateReply(`Match #${matchId} isn't yours, so only an organizer can see its full roster.`);
+  return privateReply(await rosterReport(matchId));
+}
+
+/** True for organizers, and for the host who reserved this game (or when there's no such game, so callers can say so). */
+export async function mayRunGame(interaction: Interaction, matchId: number): Promise<boolean> {
+  if (isOrganizer(interaction)) return true;
+  const [match] = await sql<{ created_by: string }[]>`SELECT created_by FROM matches WHERE match_id = ${matchId}`;
+  return !match || canRunGame(interaction, match.created_by);
 }
 
 function privateReply(content: string): Reply {

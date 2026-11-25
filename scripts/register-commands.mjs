@@ -1,9 +1,12 @@
-// Registers SORY's slash commands in the server (server commands update instantly).
+// Registers NasorAI's slash commands in the server (server commands update instantly).
 // Usage: npm run discord:commands
 
 const API = "https://discord.com/api/v10";
 const TOKEN = process.env.DISCORD_BOT_TOKEN;
 const ORGANIZER = String(1n << 13n); // Manage Messages: Organizer role and admins see these commands
+// Manage Events: the Host and Organizer roles (and admins) see the commands for running a game. Hosts can only
+// act on games they reserved; the code checks that (isHost / canRunGame in lib/discord.ts).
+const HOST = String(1n << 33n);
 
 const STRING = 3, INTEGER = 4, NUMBER = 10;
 
@@ -28,7 +31,7 @@ const AFTER_CHOICES = Array.from({ length: 18 }, (_, i) => {
 });
 
 const commands = [
-  { name: "ping", description: "Check that SORY is online" },
+  { name: "ping", description: "Check that NasorAI is online" },
   {
     name: "newgame",
     description: "Create a draft game (organizers)",
@@ -91,7 +94,7 @@ const commands = [
   {
     name: "reserve",
     description: "Save a field slot as a draft game and get the booking links (organizers)",
-    default_member_permissions: ORGANIZER,
+    default_member_permissions: HOST,
     dm_permission: false,
     options: [
       { type: STRING, name: "field", description: "Which field", required: true, choices: FIELD_CHOICES },
@@ -105,7 +108,7 @@ const commands = [
   {
     name: "confirm",
     description: "Open a booked game and post it in #games (organizers)",
-    default_member_permissions: ORGANIZER,
+    default_member_permissions: HOST,
     dm_permission: false,
     options: [{ type: INTEGER, name: "match", description: "Match number from /newgame", required: true, min_value: 1 }],
   },
@@ -118,7 +121,7 @@ const commands = [
   {
     name: "cancel",
     description: "Cancel a game: refunds everyone who paid and tells every player (organizers)",
-    default_member_permissions: ORGANIZER,
+    default_member_permissions: HOST,
     dm_permission: false,
     options: [
       { type: INTEGER, name: "match", description: "Match number", required: true, min_value: 1 },
@@ -128,14 +131,14 @@ const commands = [
   {
     name: "roster",
     description: "See who's paid, on hold, waitlisted or left, with money in and out (organizers)",
-    default_member_permissions: ORGANIZER,
+    default_member_permissions: HOST,
     dm_permission: false,
     options: [{ type: INTEGER, name: "match", description: "Match number", required: true, min_value: 1 }],
   },
   {
     name: "payouts",
     description: "Set up where the money for games you host goes (your bank, through Stripe)",
-    default_member_permissions: ORGANIZER,
+    default_member_permissions: HOST,
     options: [
       { type: 3, name: "email", description: "Your email, for Stripe (only needed the first time)", required: false, max_length: 254 },
     ],

@@ -12,7 +12,7 @@ import { torontoLabel } from "./time.js";
 // - Claim & Pay holds a spot for HOLD_MINUTES while the player pays. If the game is full they join the waitlist.
 // - When a spot frees up, the next waitlisted player is DMed and gets it for OFFER_MINUTES.
 // - Paid players can leave until LEAVE_CUTOFF_HOURS before kickoff and are refunded minus a cancellation fee.
-// Payments: with STRIPE_SECRET_KEY set, each hold gets its own Stripe Checkout page and SORY checks Stripe
+// Payments: with STRIPE_SECRET_KEY set, each hold gets its own Stripe Checkout page and NasorAI checks Stripe
 // to confirm the payment (from the return page and the once-a-minute sweep). Without it, a test Pay button
 // records MOCK payments.
 

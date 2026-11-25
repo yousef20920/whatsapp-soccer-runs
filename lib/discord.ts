@@ -52,6 +52,17 @@ export function isOrganizer(interaction: Interaction): boolean {
   return (perms & PERMISSION.ADMINISTRATOR) !== 0n || (perms & PERMISSION.MANAGE_MESSAGES) !== 0n;
 }
 
+/** Hosts (Host role) run games of their own: reserve, confirm, cancel, see the roster and get paid. Organizers can too. */
+export function isHost(interaction: Interaction): boolean {
+  const roleId = process.env.HOST_ROLE_ID;
+  return isOrganizer(interaction) || (!!roleId && !!interaction.member?.roles?.includes(roleId));
+}
+
+/** Organizers can act on any game; Hosts only on games they reserved. */
+export function canRunGame(interaction: Interaction, createdBy: string | null | undefined): boolean {
+  return isOrganizer(interaction) || (isHost(interaction) && !!createdBy && createdBy === interaction.member?.user.id);
+}
+
 export function option<T extends string | number | boolean>(interaction: Interaction, name: string): T | undefined {
   return interaction.data?.options?.find((o) => o.name === name)?.value as T | undefined;
 }
@@ -84,7 +95,7 @@ export async function discord<T = unknown>(method: string, path: string, body?: 
   return (res.status === 204 ? null : await res.json()) as T;
 }
 
-/** Replaces the "SORY is thinking…" placeholder of a deferred reply. */
+/** Replaces the "NasorAI is thinking…" placeholder of a deferred reply. */
 export function editReply(interaction: Interaction, body: unknown) {
   return discord("PATCH", `/webhooks/${interaction.application_id}/${interaction.token}/messages/@original`, body, false);
 }
@@ -110,17 +121,17 @@ export async function sendDirectMessage(userId: string, body: { content: string;
   }
 }
 
-/** Removes the private "SORY is thinking…" reply once the real answer is posted elsewhere. */
+/** Removes the private "NasorAI is thinking…" reply once the real answer is posted elsewhere. */
 export function deleteReply(interaction: Interaction) {
   return discord("DELETE", `/webhooks/${interaction.application_id}/${interaction.token}/messages/@original`, undefined, false);
 }
 
-/** Where SORY's commands run and polls go. #games only holds the current game card. */
+/** Where NasorAI's commands run and polls go. #games only holds the current game card. */
 export const commandsChannelId = () => process.env.COMMANDS_CHANNEL_ID || env("GAMES_CHANNEL_ID");
 
 /**
  * Keeps #plan-a-run commands-only. The channel already blocks typing, but Discord lets admins and the
- * server owner past any channel lock, so the once-a-minute sweep deletes anything not posted by SORY.
+ * server owner past any channel lock, so the once-a-minute sweep deletes anything not posted by NasorAI.
  * Returns how many messages were removed.
  */
 export async function clearTypedMessages(): Promise<number> {

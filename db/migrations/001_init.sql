@@ -31,7 +31,7 @@ CREATE TABLE IF NOT EXISTS registrations (
     CONSTRAINT unique_match_user UNIQUE (match_id, discord_user_id)
 );
 
--- SORY talks to Postgres directly. Turning on row level security with no policies
+-- NasorAI talks to Postgres directly. Turning on row level security with no policies
 -- keeps Supabase's public API (anon/publishable key) from reading or writing these tables.
 ALTER TABLE matches ENABLE ROW LEVEL SECURITY;
 ALTER TABLE registrations ENABLE ROW LEVEL SECURITY;

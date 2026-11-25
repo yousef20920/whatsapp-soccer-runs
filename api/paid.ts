@@ -1,7 +1,7 @@
 import { settleCheckout } from "../lib/roster.js";
 import { torontoLabel } from "../lib/time.js";
 
-// Stripe sends players here after Checkout (paid or cancelled). SORY checks the payment with Stripe itself,
+// Stripe sends players here after Checkout (paid or cancelled). NasorAI checks the payment with Stripe itself,
 // so this page can't be faked by editing the link.
 export async function GET(request: Request): Promise<Response> {
   const url = new URL(request.url);
@@ -12,7 +12,7 @@ export async function GET(request: Request): Promise<Response> {
 
   const [icon, heading, text] =
     state === "paid"
-      ? ["✅", "You're in!", `Your spot is confirmed: ${game}. You'll get a DM from SORY too. You can close this tab.`]
+      ? ["✅", "You're in!", `Your spot is confirmed: ${game}. You'll get a DM from NasorAI too. You can close this tab.`]
       : state === "refunded"
         ? ["↩️", "Payment refunded", `Your payment came in after the spot was gone, so it was refunded in full. Check Discord for other games.`]
         : cancelled || state === "unpaid"
@@ -25,7 +25,7 @@ const esc = (s: string) => s.replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&l
 
 function page(icon: string, heading: string, text: string): string {
   return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
-<title>SORY payment</title><style>
+<title>NasorAI payment</title><style>
 :root{--bg:#f6f7fb;--card:#fff;--text:#1d2130;--muted:#5b6275;--line:#e3e6ef}
 @media (prefers-color-scheme:dark){:root{--bg:#15171e;--card:#1e212b;--text:#e8eaf2;--muted:#a2a8ba;--line:#2d313e}}
 body{margin:0;background:var(--bg);color:var(--text);font:16px/1.55 system-ui,-apple-system,Segoe UI,sans-serif}

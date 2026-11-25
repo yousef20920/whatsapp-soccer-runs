@@ -1,6 +1,6 @@
 import { isOpen, loadAvailability } from "./availability.js";
 import { sql, type Match } from "./db.js";
-import { botLog, editReply, isOrganizer, option, type Interaction } from "./discord.js";
+import { botLog, editReply, isHost, option, type Interaction } from "./discord.js";
 import { hostReady } from "./payouts.js";
 import { money, priceFor } from "./pricing.js";
 import { stripeEnabled } from "./stripe.js";
@@ -18,11 +18,11 @@ export interface ReserveRequest {
 
 const MIN_NOTICE_MS = 24 * 60 * 60 * 1000;
 export const BOOKER_INSTALL_URL = "https://sory-five.vercel.app/booker/";
-/** The SORY Booker version Reserve links need. Older copies show an "Update SORY Booker" banner (from 1.0.3 on). */
+/** The NasorAI Booker version Reserve links need. Older copies show an "Update NasorAI Booker" banner (from 1.0.3 on). */
 export const BOOKER_VERSION = "1.0.3";
 
 /**
- * Link that opens Active Mississauga and lets the SORY Booker extension fill in the whole booking
+ * Link that opens Active Mississauga and lets the NasorAI Booker extension fill in the whole booking
  * (every quarter field, date, times, attendees, event details, custom questions) up to the waivers, signature and payment.
  */
 export function autofillLink(r: { resourceIds: number[]; ymd: string; startMinute: number; lengthMinutes: number; players: number; matchId: number }) {
@@ -76,12 +76,12 @@ export function parseReserveCommand(interaction: Interaction): ReserveRequest | 
 
 /**
  * Checks the slot is still open and bookable, saves it as a DRAFT game, and hands the
- * organizer the Active Mississauga links to book it. SORY never books or pays itself.
+ * organizer the Active Mississauga links to book it. NasorAI never books or pays itself.
  * Runs after a deferred reply.
  */
 export async function reserve(interaction: Interaction, request: ReserveRequest | string): Promise<void> {
   const reply = (content: string) => editReply(interaction, { content, allowed_mentions: { parse: [] } });
-  if (!isOrganizer(interaction)) return void (await reply("Only organizers can reserve fields."));
+  if (!isHost(interaction)) return void (await reply("Only hosts and organizers can reserve fields."));
   if (typeof request === "string") return void (await reply(request));
 
   const { resourceIds, ymd, startMinute, lengthMinutes } = request;
@@ -131,7 +131,7 @@ export async function reserve(interaction: Interaction, request: ReserveRequest 
       `**To book:**`,
       `1️⃣ **[🤖 Open the booking, filled in](${autofill})** on a computer`,
       `   Then tick the 2 waivers, sign, Add to cart and pay.`,
-      `-# Needs the [SORY Booker extension](${BOOKER_INSTALL_URL}) ${BOOKER_VERSION} or later. Without it, book by hand: ${bookLinks}`,
+      `-# Needs the [NasorAI Booker extension](${BOOKER_INSTALL_URL}) ${BOOKER_VERSION} or later. Without it, book by hand: ${bookLinks}`,
       `2️⃣ Then run \`/confirm match:${match.match_id}\` to post it in #games`,
       `-# Anyone can still book this slot until you do, so book soon.`,
       ...(needsPayouts ? [`💸 Players' payments go to you after kickoff. Run \`/payouts\` once to add your bank.`] : []),

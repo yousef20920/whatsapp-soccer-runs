@@ -1,11 +1,11 @@
 import { waitUntil } from "@vercel/functions";
-import { available, cancelPrompt, confirmMatch, dateAutocomplete, newGame, roster } from "../lib/commands.js";
+import { available, cancelPrompt, confirmMatch, dateAutocomplete, mayRunGame, newGame, roster } from "../lib/commands.js";
 import { cancelGame, claim, leave, leaveConfirmed, pay, type Result } from "../lib/roster.js";
 import { startPoll, vote } from "../lib/polls.js";
 import { parseReserveButton, parseReserveCommand, reserve } from "../lib/reserve.js";
 import { approvePayout, payoutsCommand } from "../lib/payouts.js";
 import { tooFast } from "../lib/ratelimit.js";
-import { botLog, discord, editReply, EPHEMERAL, followUpPrivately, InteractionType, isOrganizer, isValidSignature, json, playerOf, ResponseType, sendDirectMessage, type Interaction } from "../lib/discord.js";
+import { botLog, discord, editReply, EPHEMERAL, followUpPrivately, InteractionType, isHost, isValidSignature, json, playerOf, ResponseType, sendDirectMessage, type Interaction } from "../lib/discord.js";
 
 // Discord sends every slash command and button click here (the app's Interactions Endpoint URL).
 export async function POST(request: Request): Promise<Response> {
@@ -31,7 +31,7 @@ export async function POST(request: Request): Promise<Response> {
     if (interaction.type === InteractionType.APPLICATION_COMMAND) {
       switch (interaction.data?.name) {
         case "ping":
-          return message({ content: "🏓 Pong! SORY is online.", flags: EPHEMERAL });
+          return message({ content: "🏓 Pong! NasorAI is online.", flags: EPHEMERAL });
         case "newgame":
           return message(await newGame(interaction));
         case "confirm":
@@ -77,7 +77,7 @@ export async function POST(request: Request): Promise<Response> {
 
 /**
  * Buttons on a game. claim/leave are on the public lobby, so they answer privately; pay/drop/
- * leave-yes/stay are on SORY's private prompts or DMs, so they update that prompt in place.
+ * leave-yes/stay are on NasorAI's private prompts or DMs, so they update that prompt in place.
  */
 function gameButton(interaction: Interaction): Response {
   const [action, id] = (interaction.data?.custom_id ?? "").split(":");
@@ -105,10 +105,11 @@ function gameButton(interaction: Interaction): Response {
   }
   if (action === "cancel-yes" || action === "cancel-no") {
     if (action === "cancel-no") return json({ type: ResponseType.UPDATE_MESSAGE, data: { content: "👍 Kept the game. Nothing changed.", components: [] } });
-    if (!isOrganizer(interaction)) return message({ content: "Only organizers can cancel games.", flags: EPHEMERAL });
+    if (!isHost(interaction)) return message({ content: "Only hosts and organizers can cancel games.", flags: EPHEMERAL });
     const reason = (interaction.data?.custom_id ?? "").split(":").slice(2).join(":") || null;
     waitUntil(
-      cancelGame(Number(id), reason, playerOf(interaction).id)
+      mayRunGame(interaction, Number(id))
+        .then((mine) => (mine ? cancelGame(Number(id), reason, playerOf(interaction).id) : `Match #${id} isn't yours, so only an organizer can cancel it.`))
         .then((content) => editReply(interaction, { content, components: [], allowed_mentions: { parse: [] } }))
         .catch((err) => failLater(interaction, err)),
     );
@@ -125,13 +126,13 @@ function gameButton(interaction: Interaction): Response {
     return json(update ? { type: ResponseType.DEFERRED_UPDATE } : { type: ResponseType.DEFERRED_MESSAGE, data: { flags: EPHEMERAL } });
   };
   // Buttons on the public game card answer by DM, so #games only ever shows the game itself.
-  // Acknowledging with a silent update leaves the card as it is (SORY redraws it separately).
+  // Acknowledging with a silent update leaves the card as it is (NasorAI redraws it separately).
   const runInDm = (work: () => Promise<Result>) => {
     waitUntil(
       work()
         .then(async (r) => {
           if (!(await sendDirectMessage(player.id, { content: r.content, components: r.components }))) {
-            const note = "\n-# I couldn't DM you. To get SORY's messages privately, allow DMs from server members (server name ▸ Privacy Settings).";
+            const note = "\n-# I couldn't DM you. To get NasorAI's messages privately, allow DMs from server members (server name ▸ Privacy Settings).";
             await followUpPrivately(interaction, r.content + note, r.components);
           }
         })
@@ -173,7 +174,7 @@ function agreeToRules(interaction: Interaction): Response {
     discord("PUT", `/guilds/${interaction.guild_id}/members/${player.id}/roles/${roleId}`)
       .then(() =>
         editReply(interaction, {
-          content: `✅ Welcome, ${player.name}! You can now see <#${process.env.GAMES_CHANNEL_ID}> and <#${process.env.COMMANDS_CHANNEL_ID}>. Allow DMs from this server so SORY can send your payment links.`,
+          content: `✅ Welcome, ${player.name}! You can now see <#${process.env.GAMES_CHANNEL_ID}> and <#${process.env.COMMANDS_CHANNEL_ID}>. Allow DMs from this server so NasorAI can send your payment links.`,
         }),
       )
       .then(() => botLog(`🙋 <@${player.id}> agreed to the rules and got the Player role`))

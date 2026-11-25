@@ -1,11 +1,11 @@
 import { createHmac, timingSafeEqual } from "node:crypto";
 import { sql } from "./db.js";
-import { botLog, discord, displayName, EPHEMERAL, isOrganizer, option, playerOf, sendDirectMessage, type Interaction } from "./discord.js";
+import { botLog, discord, displayName, EPHEMERAL, isHost, option, playerOf, sendDirectMessage, type Interaction } from "./discord.js";
 import { money } from "./pricing.js";
 import { chargeOf, createHostAccount, hostAccountLink, hostCanReceive, SITE_URL, stripeEnabled, stripeTestMode, transferToHost } from "./stripe.js";
 
 // Host payouts: the organizer who reserves a game is its host. Players pay the club through Stripe, and once
-// the game kicks off SORY asks the server owner to approve the payout in #bot-logs. Once approved, it sends
+// the game kicks off NasorAI asks the server owner to approve the payout in #bot-logs. Once approved, it sends
 // each paid spot (minus Stripe's fee) to the host's own Stripe account, which pays out to their bank.
 // Hosts set that up once with /payouts.
 
@@ -17,7 +17,7 @@ export async function hostAccountOf(discordUserId: string): Promise<string | nul
 }
 
 // The /payouts link carries a signed, expiring token instead of the Stripe link itself: Stripe's links
-// are single-use and expire within minutes, so SORY makes a fresh one each time it's opened.
+// are single-use and expire within minutes, so NasorAI makes a fresh one each time it's opened.
 function sign(text: string): string {
   return createHmac("sha256", `sory-payouts:${process.env.STRIPE_SECRET_KEY ?? ""}`).update(text).digest("base64url");
 }
@@ -33,10 +33,10 @@ export function userFromToken(token: string): string | null {
   return want.length === given.length && timingSafeEqual(want, given) ? user : null;
 }
 
-/** /payouts: organizers set up (or check) where their games' money goes. */
+/** /payouts: hosts and organizers set up (or check) where their games' money goes. */
 export async function payoutsCommand(interaction: Interaction) {
   const reply = (content: string) => ({ content, flags: EPHEMERAL });
-  if (!isOrganizer(interaction)) return reply("Only organizers host games, so only they need payouts.");
+  if (!isHost(interaction)) return reply("Only hosts get payouts. Ask an organizer if you want to host games.");
   if (!stripeEnabled()) return reply("Card payments aren't switched on yet, so there's nothing to pay out.");
 
   const userId = interaction.member!.user.id;

@@ -1,4 +1,4 @@
--- Payout approval: after kickoff SORY asks the Discord server owner (in #bot-logs) to approve each game's
+-- Payout approval: after kickoff NasorAI asks the Discord server owner (in #bot-logs) to approve each game's
 -- payout to its host. Nothing is sent to the host until approved_at is set.
 CREATE TABLE IF NOT EXISTS payout_approvals (
     match_id INT PRIMARY KEY REFERENCES matches(match_id) ON DELETE CASCADE,

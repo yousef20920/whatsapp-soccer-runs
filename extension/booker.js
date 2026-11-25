@@ -1,6 +1,6 @@
-// SORY Booker: fills in an Active Mississauga field booking from a SORY Reserve link.
+// NasorAI Booker: fills in an Active Mississauga field booking from a NasorAI Reserve link.
 //
-// A SORY link looks like .../reservation/landing/search/detail/1192#sory=<base64url JSON>, with
+// A NasorAI link looks like .../reservation/landing/search/detail/1192#sory=<base64url JSON>, with
 // { ids: [1192, 1197], ymd: "2026-11-22", start: "11:00 PM", end: "11:59 PM", attendees: 18, name: "..." }.
 // For each field it sets the attendees, date and time and presses Proceed, then fills in the event
 // details, the 2 "I acknowledge" field-rules questions and the purpose/music questions. It never ticks
@@ -56,7 +56,7 @@
         outdated = p.v; // shown once the page has a body
       } else if (Array.isArray(p.ids) && p.ids.length && p.ymd && p.start && p.end) save({ ...p, next: 0, created: Date.now() });
     } catch (err) {
-      console.error("SORY Booker: unreadable link", err);
+      console.error("NasorAI Booker: unreadable link", err);
     }
     history.replaceState(null, "", location.pathname + location.search);
   }
@@ -75,7 +75,7 @@
     if (el.dataset.html === html) return; // same message: don't redraw (the loop runs every second)
     el.dataset.html = html;
     el.style.background = { info: "#4752c4", done: "#1f8b4c", error: "#c0392b" }[kind];
-    el.innerHTML = `<b>SORY</b> · ${html}`;
+    el.innerHTML = `<b>NasorAI</b> · ${html}`;
     if (button) {
       const b = document.createElement("button");
       b.textContent = button.label;
@@ -135,7 +135,7 @@
   async function fillDetail(plan, id) {
     const attendees = await waitFor(attendeesBox);
     if (!attendees || pageHas(/sign in to re-check availability/i)) {
-      banner("Sign in (top right) to continue. SORY carries on after you sign in.");
+      banner("Sign in (top right) to continue. NasorAI carries on after you sign in.");
       return "wait";
     }
     if (plan.next === 0 && pageHas(/another reservation in progress/i)) {
@@ -262,10 +262,10 @@
       } else if (/\/reservation\/landing\/search\/?$/.test(path) && plan.next < plan.ids.length && !plan.clearing) {
         location.assign(detailUrl(plan.ids[plan.next]));
       } else if (/signin/i.test(path)) {
-        banner("Sign in to continue. SORY carries on after you sign in.");
+        banner("Sign in to continue. NasorAI carries on after you sign in.");
       }
     } catch (err) {
-      console.error("SORY Booker", err);
+      console.error("NasorAI Booker", err);
       fail("Something went wrong. Finish the booking by hand, or try the link again.");
     } finally {
       busy = false;
@@ -282,9 +282,9 @@
   readLink();
   const start = () => {
     if (outdated) {
-      // The link was made for a newer SORY Booker: stop rather than fill the booking the old way.
+      // The link was made for a newer NasorAI Booker: stop rather than fill the booking the old way.
       return banner(
-        `⚠️ Update SORY Booker: you have ${VERSION}, this link needs ${outdated} or later. ` +
+        `⚠️ Update NasorAI Booker: you have ${VERSION}, this link needs ${outdated} or later. ` +
           `Download the new version, reload it in chrome://extensions, then open the link again.`,
         "error",
         { label: "Get the update", onClick: () => window.open(INSTALL_URL, "_blank") },

@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
-  "name": "SORY Booker",
+  "name": "NasorAI Booker",
   "version": "1.0.3",
-  "description": "Fills in Active Mississauga field bookings from SORY's Reserve links. You still agree to the waivers, sign and pay yourself.",
+  "description": "Fills in Active Mississauga field bookings from NasorAI's Reserve links. You still agree to the waivers, sign and pay yourself.",
   "content_scripts": [
     {
       "matches": ["https://anc.ca.apm.activecommunities.com/activemississauga/*"],

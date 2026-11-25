@@ -1,10 +1,10 @@
 // Minimal Stripe client (Checkout Sessions and refunds) over Stripe's REST API.
-// Players pay on Stripe's own hosted Checkout page, so card details never touch SORY.
+// Players pay on Stripe's own hosted Checkout page, so card details never touch NasorAI.
 
 const API = "https://api.stripe.com/v1";
 const key = () => process.env.STRIPE_SECRET_KEY ?? "";
 
-/** Real Stripe payments are on once STRIPE_SECRET_KEY is set; otherwise SORY uses test (mock) payments. */
+/** Real Stripe payments are on once STRIPE_SECRET_KEY is set; otherwise NasorAI uses test (mock) payments. */
 export const stripeEnabled = () => key().length > 0;
 /** Stripe sandbox (test) keys: payments use test cards and no real money moves. */
 export const stripeTestMode = () => /^(sk|rk)_test_/.test(key());
@@ -56,7 +56,7 @@ export interface CheckoutSession {
 
 /**
  * A Stripe Checkout page for one player's spot. Stripe needs at least 30 minutes before a session
- * expires on its own; SORY expires it sooner itself when the hold runs out.
+ * expires on its own; NasorAI expires it sooner itself when the hold runs out.
  */
 export function createCheckout(opts: { matchId: number; userId: string; amountCents: number; description: string; holdKey: string }) {
   return stripe<CheckoutSession>(
@@ -94,7 +94,7 @@ export function refund(paymentIntent: string, amountCents: number, idempotencyKe
 
 // ---- Host payouts (Stripe Connect) ----
 // Each host gets a connected account (Accounts v2, recipient configuration, Express dashboard). The club
-// stays the merchant: players pay the club, and after kickoff SORY transfers each payment to the host
+// stays the merchant: players pay the club, and after kickoff NasorAI transfers each payment to the host
 // (separate charges and transfers), keeping back only what Stripe charged for the payment.
 
 const API_V2 = "https://api.stripe.com/v2";

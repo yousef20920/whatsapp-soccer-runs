@@ -28,7 +28,7 @@ const toMinutes = (time: string, isEnd: boolean) => {
 async function fetchResource(id: number, from: string, to: string): Promise<Days> {
   const url = `${API}/${id}?start_date=${from}&end_date=${to}&customer_id=0&company_id=0&locale=en-US`;
   const res = await fetch(url, {
-    headers: { Accept: "application/json", "User-Agent": "SORY/1.0 (NASORY runs community soccer group)" },
+    headers: { Accept: "application/json", "User-Agent": "NasorAI/1.0 (NASORY runs community soccer group)" },
     signal: AbortSignal.timeout(8000),
   });
   if (!res.ok) throw new Error(`Active Mississauga ${id} answered ${res.status}`);
@@ -56,7 +56,7 @@ export async function loadAvailability(): Promise<Snapshot> {
   const [from, to] = [addDays(today, 1), addDays(today, BOOKING_WINDOW_DAYS)];
   let stale = false;
 
-  // Ask the City's site a few fields at a time, so SORY never hammers it.
+  // Ask the City's site a few fields at a time, so NasorAI never hammers it.
   const fresh: { id: number; days: Days }[] = [];
   for (let i = 0; i < needed.length; i += 3) {
     const batch = await Promise.allSettled(needed.slice(i, i + 3).map(async (id) => ({ id, days: await fetchResource(id, from, to) })));
