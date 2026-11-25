@@ -29,6 +29,10 @@ const P = {
   CREATE_PUBLIC_THREADS: 1n << 35n,
   CREATE_PRIVATE_THREADS: 1n << 36n,
   SEND_MESSAGES_IN_THREADS: 1n << 38n,
+  ATTACH_FILES: 1n << 15n,
+  USE_EXTERNAL_STICKERS: 1n << 37n,
+  SEND_VOICE_MESSAGES: 1n << 46n,
+  SEND_POLLS: 1n << 49n,
 };
 const bits = (...names) => names.reduce((acc, n) => acc | P[n], 0n).toString();
 
@@ -43,7 +47,9 @@ const ORGANIZER_ROLE = "Organizer";
 
 // Server layout. access: "open" (everyone talks), "readonly" (only Organizers + bot post), "private" (Organizers only),
 // "buttons" (no one types or runs commands; only the bot's game card and its buttons),
-// "commands" (slash commands only, no chat).
+// "commands" (slash commands only, no chat). Discord greys out the message box, and with it slash commands, for anyone
+// without Send Messages, so "commands" allows sending and an AutoMod rule ("Commands only in #plan-a-run", a [\s\S]
+// regex with every other channel and the Organizer/Admin roles exempt) blocks typed messages. Commands aren't messages.
 const LAYOUT = [
   {
     category: "INFO",
@@ -133,10 +139,12 @@ function overwritesFor(access, guildId, organizerRoleId, botUserId) {
     ];
   }
   if (access === "commands") {
-    const allow = bits("USE_APPLICATION_COMMANDS");
+    const allow = bits("USE_APPLICATION_COMMANDS", "SEND_MESSAGES");
+    // AutoMod only reads text, so block what can be sent without any: files, stickers, voice messages, polls, threads.
+    const deny = bits("ATTACH_FILES", "USE_EXTERNAL_STICKERS", "SEND_VOICE_MESSAGES", "SEND_POLLS", "SEND_MESSAGES_IN_THREADS", "CREATE_PUBLIC_THREADS", "CREATE_PRIVATE_THREADS");
     return [
-      { ...everyone, allow, deny: noTalk },
-      { ...organizer, allow, deny: noTalk },
+      { ...everyone, allow, deny },
+      { ...organizer, allow, deny: bits("SEND_MESSAGES_IN_THREADS", "CREATE_PUBLIC_THREADS", "CREATE_PRIVATE_THREADS") },
       { ...bot, allow: botAllow, deny: "0" },
     ];
   }
